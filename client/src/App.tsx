@@ -290,6 +290,7 @@ export default function App() {
   const lastStatusPollRef = useRef(0);
   const selectedConversationRef = useRef<number | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
+  const pollDelayRef = useRef(2500);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -405,8 +406,9 @@ export default function App() {
     let isMounted = true;
     const poller = async () => {
       try {
-        const data = await pollMessages(lastPollRef.current);
+        const data = await pollMessages(lastPollRef.current, 50);
         if (!isMounted || !data.messages?.length) {
+          pollDelayRef.current = Math.min(pollDelayRef.current + 1000, 8000);
           return;
         }
 
@@ -487,17 +489,28 @@ export default function App() {
           markRead(selectedConversationRef.current).catch(() => undefined);
         }
         lastPollRef.current = data.messages[data.messages.length - 1].created_at;
+        pollDelayRef.current = 2500;
       } catch (error) {
         setStatus((error as Error).message);
       }
     };
 
-    const interval = setInterval(poller, 3000);
-    poller();
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await poller();
+        if (isMounted) {
+          schedule();
+        }
+      }, pollDelayRef.current);
+    };
+    poller().then(schedule).catch(schedule);
 
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      if (timer) {
+        window.clearTimeout(timer);
+      }
     };
   }, [privateKeyPromise, token]);
 
@@ -509,7 +522,7 @@ export default function App() {
     let isMounted = true;
     const poller = async () => {
       try {
-        const data = await pollSentStatuses(lastStatusPollRef.current);
+        const data = await pollSentStatuses(lastStatusPollRef.current, 50);
         if (!isMounted || !data.statuses?.length) {
           return;
         }

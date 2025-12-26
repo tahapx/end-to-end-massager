@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import crypto from "node:crypto";
 import {
   createAdminSession,
@@ -34,11 +35,30 @@ import {
 } from "./db.js";
 import { readUserProfile, updateUserProfile } from "./profiles.js";
 
-const server = Fastify({ logger: true });
+const server = Fastify({ logger: true, bodyLimit: 20 * 1024 * 1024 });
 
 await server.register(cors, {
   origin: true,
   methods: ["GET", "POST"]
+});
+
+await server.register(rateLimit, {
+  global: true,
+  max: 300,
+  timeWindow: "1 minute"
+});
+
+server.addHook("onResponse", (request, reply, done) => {
+  server.log.info(
+    {
+      method: request.method,
+      url: request.url,
+      statusCode: reply.statusCode,
+      responseTime: reply.getResponseTime()
+    },
+    "request"
+  );
+  done();
 });
 
 const typingState = new Map<
@@ -47,6 +67,13 @@ const typingState = new Map<
 >();
 
 const TYPING_TTL_MS = 6000;
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+const MAX_MESSAGE_ID = 64;
+const MAX_CIPHERTEXT = 16 * 1024 * 1024;
+const MAX_NONCE = 512;
+const MAX_GROUP_NAME = 40;
+const MAX_BIO = 160;
+const MAX_AVATAR = 3 * 1024 * 1024;
 
 function generateToken(): string {
   return crypto.randomBytes(24).toString("hex");
@@ -81,7 +108,10 @@ function getAdminToken(authHeader?: string): string | null {
 
 server.get("/health", async () => ({ ok: true }));
 
-server.post("/api/auth/signup", async (request, reply) => {
+server.post(
+  "/api/auth/signup",
+  { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const body = request.body as {
     username?: string;
     password?: string;
@@ -101,6 +131,10 @@ server.post("/api/auth/signup", async (request, reply) => {
     return reply
       .status(400)
       .send({ error: "username, password, publicKey required" });
+  }
+
+  if (!USERNAME_RE.test(username)) {
+    return reply.status(400).send({ error: "invalid username" });
   }
 
   if (password.length < 6) {
@@ -135,7 +169,10 @@ server.post("/api/auth/signup", async (request, reply) => {
   };
 });
 
-server.post("/api/auth/login", async (request, reply) => {
+server.post(
+  "/api/auth/login",
+  { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const body = request.body as {
     username?: string;
     password?: string;
@@ -245,6 +282,19 @@ server.post("/api/profile", async (request, reply) => {
     allowGroupInvite?: boolean;
   };
 
+  if (typeof body.bio === "string" && body.bio.length > MAX_BIO) {
+    return reply.status(400).send({ error: "bio too long" });
+  }
+
+  if (typeof body.avatar === "string") {
+    if (!body.avatar.startsWith("data:image/")) {
+      return reply.status(400).send({ error: "invalid avatar format" });
+    }
+    if (body.avatar.length > MAX_AVATAR) {
+      return reply.status(400).send({ error: "avatar too large" });
+    }
+  }
+
   const updated = updateUserAccount(userId, {
     avatar:
       typeof body.avatar === "string" || body.avatar === null
@@ -318,6 +368,10 @@ server.post("/api/conversations", async (request, reply) => {
     return reply.status(400).send({ error: "name required" });
   }
 
+  if (name && name.length > MAX_GROUP_NAME) {
+    return reply.status(400).send({ error: "name too long" });
+  }
+
   if (type === "direct" && members.length !== 1) {
     return reply
       .status(400)
@@ -389,7 +443,10 @@ server.get("/api/conversations/:id/members", async (request, reply) => {
   return { members };
 });
 
-server.post("/api/messages/send", async (request, reply) => {
+server.post(
+  "/api/messages/send",
+  { config: { rateLimit: { max: 300, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const userId = getAuthUserId(request.headers.authorization);
   if (!userId) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -398,9 +455,6 @@ server.post("/api/messages/send", async (request, reply) => {
   const user = findUserById(userId);
   if (!user || user.banned) {
     return reply.status(403).send({ error: "user banned" });
-  }
-  if (!user.can_send) {
-    return reply.status(403).send({ error: "user cannot send" });
   }
 
   const body = request.body as {
@@ -420,6 +474,10 @@ server.post("/api/messages/send", async (request, reply) => {
     return reply
       .status(400)
       .send({ error: "conversationId and payloads required" });
+  }
+
+  if (payloads.length > 5) {
+    return reply.status(400).send({ error: "too many payloads" });
   }
 
   const conversation = getConversationById(conversationId);
@@ -450,6 +508,18 @@ server.post("/api/messages/send", async (request, reply) => {
         .send({ error: "messageId, toUsername, ciphertext, nonce required" });
     }
 
+    if (messageId.length > MAX_MESSAGE_ID) {
+      return reply.status(400).send({ error: "messageId too long" });
+    }
+
+    if (ciphertext.length > MAX_CIPHERTEXT) {
+      return reply.status(400).send({ error: "message too large" });
+    }
+
+    if (nonce.length > MAX_NONCE) {
+      return reply.status(400).send({ error: "nonce too large" });
+    }
+
     if (!memberUsernames.has(toUsername)) {
       return reply.status(400).send({ error: "recipient not in conversation" });
     }
@@ -459,37 +529,60 @@ server.post("/api/messages/send", async (request, reply) => {
       return reply.status(404).send({ error: "recipient not found" });
     }
 
-    createMessage(messageId, conversationId, userId, recipient.id, ciphertext, nonce);
+    createMessage(
+      messageId,
+      conversationId,
+      userId,
+      recipient.id,
+      ciphertext,
+      nonce
+    );
   }
 
   return { ok: true };
 });
 
-server.get("/api/messages/poll", async (request, reply) => {
+server.get(
+  "/api/messages/poll",
+  { config: { rateLimit: { max: 180, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const userId = getAuthUserId(request.headers.authorization);
   if (!userId) {
     return reply.status(401).send({ error: "unauthorized" });
   }
 
-  const sinceRaw = (request.query as { since?: string }).since;
+  const query = request.query as { since?: string; limit?: string };
+  const sinceRaw = query.since;
   const since = sinceRaw ? Number(sinceRaw) : 0;
+  const limitRaw = query.limit ? Number(query.limit) : 50;
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
 
-  const messages = pollMessages(userId, Number.isFinite(since) ? since : 0);
+  const messages = pollMessages(userId, Number.isFinite(since) ? since : 0, limit);
   markDelivered(messages.map((msg) => msg.id));
 
   return { messages };
 });
 
-server.get("/api/messages/sent", async (request, reply) => {
+server.get(
+  "/api/messages/sent",
+  { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const userId = getAuthUserId(request.headers.authorization);
   if (!userId) {
     return reply.status(401).send({ error: "unauthorized" });
   }
 
-  const sinceRaw = (request.query as { since?: string }).since;
+  const query = request.query as { since?: string; limit?: string };
+  const sinceRaw = query.since;
   const since = sinceRaw ? Number(sinceRaw) : 0;
+  const limitRaw = query.limit ? Number(query.limit) : 50;
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
 
-  const statuses = listSentStatuses(userId, Number.isFinite(since) ? since : 0);
+  const statuses = listSentStatuses(
+    userId,
+    Number.isFinite(since) ? since : 0,
+    limit
+  );
   return { statuses };
 });
 
@@ -546,7 +639,10 @@ server.post("/api/messages/delete", async (request, reply) => {
   return reply.status(400).send({ error: "invalid scope" });
 });
 
-server.post("/api/typing", async (request, reply) => {
+server.post(
+  "/api/typing",
+  { config: { rateLimit: { max: 180, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const userId = getAuthUserId(request.headers.authorization);
   if (!userId) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -580,7 +676,10 @@ server.post("/api/typing", async (request, reply) => {
   return { ok: true };
 });
 
-server.get("/api/typing", async (request, reply) => {
+server.get(
+  "/api/typing",
+  { config: { rateLimit: { max: 180, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const userId = getAuthUserId(request.headers.authorization);
   if (!userId) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -610,7 +709,10 @@ server.get("/api/typing", async (request, reply) => {
   return { users };
 });
 
-server.post("/api/admin/login", async (request, reply) => {
+server.post(
+  "/api/admin/login",
+  { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const body = request.body as { username?: string; password?: string };
   const username = body.username?.trim();
   const password = body.password?.trim();
@@ -636,7 +738,10 @@ server.post("/api/admin/login", async (request, reply) => {
   return { token, username: credentials.username };
 });
 
-server.post("/api/admin/password", async (request, reply) => {
+server.post(
+  "/api/admin/password",
+  { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -652,7 +757,10 @@ server.post("/api/admin/password", async (request, reply) => {
   return { ok: true };
 });
 
-server.get("/api/admin/users", async (request, reply) => {
+server.get(
+  "/api/admin/users",
+  { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -679,7 +787,10 @@ server.get("/api/admin/users", async (request, reply) => {
   return { users };
 });
 
-server.post("/api/admin/users/:id/flags", async (request, reply) => {
+server.post(
+  "/api/admin/users/:id/flags",
+  { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -710,7 +821,10 @@ server.post("/api/admin/users/:id/flags", async (request, reply) => {
   return { ok: true };
 });
 
-server.post("/api/admin/users/:id/password", async (request, reply) => {
+server.post(
+  "/api/admin/users/:id/password",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -734,7 +848,10 @@ server.post("/api/admin/users/:id/password", async (request, reply) => {
   return { ok: true };
 });
 
-server.post("/api/admin/users/:id/delete", async (request, reply) => {
+server.post(
+  "/api/admin/users/:id/delete",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -750,7 +867,10 @@ server.post("/api/admin/users/:id/delete", async (request, reply) => {
   return { ok: true };
 });
 
-server.get("/api/admin/conversations", async (request, reply) => {
+server.get(
+  "/api/admin/conversations",
+  { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });
@@ -771,7 +891,10 @@ server.get("/api/admin/conversations", async (request, reply) => {
   return { conversations };
 });
 
-server.post("/api/admin/conversations/:id/delete", async (request, reply) => {
+server.post(
+  "/api/admin/conversations/:id/delete",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (request, reply) => {
   const token = getAdminToken(request.headers.authorization);
   if (!token || !findAdminSession(token)) {
     return reply.status(401).send({ error: "unauthorized" });

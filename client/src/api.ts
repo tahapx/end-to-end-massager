@@ -202,12 +202,15 @@ export async function sendMessage(
   return response.json();
 }
 
-export async function pollMessages(since: number) {
-  const response = await fetch(`${API_BASE}/api/messages/poll?since=${since}`, {
+export async function pollMessages(since: number, limit = 50) {
+  const response = await fetch(
+    `${API_BASE}/api/messages/poll?since=${since}&limit=${limit}`,
+    {
     headers: {
       ...authHeaders()
     }
-  });
+    }
+  );
 
   if (!response.ok) {
     throw new Error((await response.json()).error || "Poll failed");
@@ -216,9 +219,9 @@ export async function pollMessages(since: number) {
   return response.json();
 }
 
-export async function pollSentStatuses(since: number) {
+export async function pollSentStatuses(since: number, limit = 50) {
   const response = await fetch(
-    `${API_BASE}/api/messages/sent?since=${since}`,
+    `${API_BASE}/api/messages/sent?since=${since}&limit=${limit}`,
     {
       headers: {
         ...authHeaders()

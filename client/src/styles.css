@@ -462,6 +462,12 @@ button:disabled {
   gap: 20px;
 }
 
+.avatar-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
 .settings-form {
   display: grid;
   gap: 12px;

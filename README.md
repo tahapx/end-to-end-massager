@@ -18,6 +18,7 @@ License: MIT (change if needed)
 - Admin panel for moderation (ban, limits, delete users/channels)
 - User profile logging (IP + device info per username file)
 - Profile photo + bio + privacy controls
+- Built-in rate limiting + request logging
 
 ## Tech stack
 
@@ -92,6 +93,16 @@ Default admin credentials:
 Change the admin password after first login in the admin panel.
 
 Admin panel is accessed at `/#admin` (not shown in the regular UI).
+
+## Security checklist (recommended)
+
+- Use HTTPS and a real database (Postgres) before public release.
+- Rotate admin credentials and store them in environment variables.
+- Add CSRF protection if you switch to cookies.
+- Add stronger password policy + account lockout after repeated failures.
+- Use separate admin domain/app and enable 2FA.
+- Store files in object storage (S3/R2) instead of base64 in JSON.
+- Add server-side input validation (Zod/JSON schema) for all endpoints.
 
 ## Local testing tip
 

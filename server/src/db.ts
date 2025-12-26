@@ -468,7 +468,8 @@ export function createMessage(
 
 export function pollMessages(
   recipientId: number,
-  since: number
+  since: number,
+  limit = 50
 ): Array<{
   id: number;
   group_id: string;
@@ -492,6 +493,7 @@ export function pollMessages(
         message.recipient_id === recipientId && message.created_at > since
     )
     .sort((a, b) => a.created_at - b.created_at)
+    .slice(0, Math.max(1, limit))
     .map((message) => {
       const sender = usersById.get(message.sender_id);
       return {
@@ -546,7 +548,8 @@ export function markRead(conversationId: number, recipientId: number): void {
 
 export function listSentStatuses(
   senderId: number,
-  since: number
+  since: number,
+  limit = 50
 ): Array<{
   group_id: string;
   conversation_id: number;
@@ -586,7 +589,12 @@ export function listSentStatuses(
     deleted_at: number | null;
   }> = [];
 
-  for (const [groupId, items] of grouped) {
+  const groupedEntries = Array.from(grouped.entries()).slice(
+    0,
+    Math.max(1, limit)
+  );
+
+  for (const [groupId, items] of groupedEntries) {
     const deliveredAt = items
       .map((item) => item.delivered_at)
       .filter((value): value is number => value !== null)
