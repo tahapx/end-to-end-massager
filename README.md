@@ -8,11 +8,13 @@ License: MIT (change if needed)
 
 ## Features (v1)
 
-- Username-only signup/login
+- Username + password signup/login
 - Polling-based message delivery
 - End-to-end encryption in the browser
 - Server stores ciphertext only
 - No native dependencies in the backend
+- Personal chats, groups, and channels (max 5 members)
+- Encrypted image/audio attachments (base64)
 
 ## Tech stack
 
@@ -84,10 +86,11 @@ usernames to test encrypted chat between them.
 
 ## Security notes (MVP)
 
-- Username-only auth is not secure.
+- Simple password auth (no MFA).
 - Private key is stored in browser storage (not safe for production).
 - No forward secrecy or key rotation.
 - No key verification (fingerprints/QR).
+ - Attachments are stored as encrypted base64 strings (size capped).
 
 ## Roadmap
 

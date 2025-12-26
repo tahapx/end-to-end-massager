@@ -3,21 +3,39 @@ import path from "node:path";
 
 const DB_PATH = path.join(process.cwd(), "data.json");
 
-type UserRow = {
+export type UserRow = {
   id: number;
   username: string;
+  password_hash: string;
+  password_salt: string;
   public_key: string;
   created_at: number;
 };
 
-type SessionRow = {
+export type SessionRow = {
   token: string;
   user_id: number;
   created_at: number;
 };
 
-type MessageRow = {
+export type ConversationType = "direct" | "group" | "channel";
+
+export type ConversationRow = {
   id: number;
+  type: ConversationType;
+  name: string | null;
+  owner_id: number;
+  created_at: number;
+};
+
+export type MembershipRow = {
+  conversation_id: number;
+  user_id: number;
+};
+
+export type MessageRow = {
+  id: number;
+  conversation_id: number;
   sender_id: number;
   recipient_id: number;
   ciphertext: string;
@@ -29,9 +47,12 @@ type MessageRow = {
 type DbShape = {
   users: UserRow[];
   sessions: SessionRow[];
+  conversations: ConversationRow[];
+  memberships: MembershipRow[];
   messages: MessageRow[];
   nextIds: {
     users: number;
+    conversations: number;
     messages: number;
   };
 };
@@ -39,8 +60,10 @@ type DbShape = {
 const defaultDb: DbShape = {
   users: [],
   sessions: [],
+  conversations: [],
+  memberships: [],
   messages: [],
-  nextIds: { users: 1, messages: 1 }
+  nextIds: { users: 1, conversations: 1, messages: 1 }
 };
 
 function loadDb(): DbShape {
@@ -64,12 +87,19 @@ function saveDb(db: DbShape): void {
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
 }
 
-export function createUser(username: string, publicKey: string): UserRow {
+export function createUser(
+  username: string,
+  passwordHash: string,
+  passwordSalt: string,
+  publicKey: string
+): UserRow {
   const db = loadDb();
   const createdAt = Date.now();
   const user: UserRow = {
     id: db.nextIds.users,
     username,
+    password_hash: passwordHash,
+    password_salt: passwordSalt,
     public_key: publicKey,
     created_at: createdAt
   };
@@ -102,7 +132,67 @@ export function findSession(token: string): { user_id: number } | null {
   return session ? { user_id: session.user_id } : null;
 }
 
+export function createConversation(
+  type: ConversationType,
+  name: string | null,
+  ownerId: number,
+  memberIds: number[]
+): ConversationRow {
+  const db = loadDb();
+  const createdAt = Date.now();
+  const conversation: ConversationRow = {
+    id: db.nextIds.conversations,
+    type,
+    name,
+    owner_id: ownerId,
+    created_at: createdAt
+  };
+  db.nextIds.conversations += 1;
+  db.conversations.push(conversation);
+
+  const uniqueMembers = Array.from(new Set([ownerId, ...memberIds]));
+  for (const userId of uniqueMembers) {
+    db.memberships.push({ conversation_id: conversation.id, user_id: userId });
+  }
+
+  saveDb(db);
+  return conversation;
+}
+
+export function listConversationsForUser(userId: number): ConversationRow[] {
+  const db = loadDb();
+  const conversationIds = new Set(
+    db.memberships
+      .filter((member) => member.user_id === userId)
+      .map((member) => member.conversation_id)
+  );
+
+  return db.conversations.filter((conv) => conversationIds.has(conv.id));
+}
+
+export function getConversationById(id: number): ConversationRow | null {
+  const db = loadDb();
+  return db.conversations.find((conv) => conv.id === id) ?? null;
+}
+
+export function listMembers(conversationId: number): UserRow[] {
+  const db = loadDb();
+  const memberIds = db.memberships
+    .filter((member) => member.conversation_id === conversationId)
+    .map((member) => member.user_id);
+  return db.users.filter((user) => memberIds.includes(user.id));
+}
+
+export function isMember(conversationId: number, userId: number): boolean {
+  const db = loadDb();
+  return db.memberships.some(
+    (member) =>
+      member.conversation_id === conversationId && member.user_id === userId
+  );
+}
+
 export function createMessage(
+  conversationId: number,
   senderId: number,
   recipientId: number,
   ciphertext: string,
@@ -112,6 +202,7 @@ export function createMessage(
   const createdAt = Date.now();
   const message: MessageRow = {
     id: db.nextIds.messages,
+    conversation_id: conversationId,
     sender_id: senderId,
     recipient_id: recipientId,
     ciphertext,
@@ -129,6 +220,7 @@ export function pollMessages(
   since: number
 ): Array<{
   id: number;
+  conversation_id: number;
   sender_username: string;
   sender_public_key: string;
   ciphertext: string;
@@ -148,6 +240,7 @@ export function pollMessages(
       const sender = usersById.get(message.sender_id);
       return {
         id: message.id,
+        conversation_id: message.conversation_id,
         sender_username: sender?.username ?? "unknown",
         sender_public_key: sender?.public_key ?? "",
         ciphertext: message.ciphertext,

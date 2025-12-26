@@ -1,7 +1,9 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap");
+
 :root {
   color-scheme: light;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  background: #f6f5f2;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  background: #f4f1eb;
   color: #1f1d1b;
 }
 
@@ -11,35 +13,56 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top, #fff 0%, #f0ede7 45%, #e4dfd6 100%);
+  background: radial-gradient(circle at top left, #fff5e7 0%, #f1ede6 45%, #e5dfd4 100%);
 }
 
 .app {
-  max-width: 880px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 32px 20px 80px;
+  padding: 28px 20px 80px;
 }
 
-.header {
-  text-align: left;
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
   margin-bottom: 24px;
 }
 
-.header h1 {
-  margin: 0 0 8px;
-  font-size: 32px;
+.topbar h1 {
+  margin: 0 0 6px;
+  font-size: 34px;
+}
+
+.topbar p {
+  margin: 0;
+  color: #6f675d;
+}
+
+.user-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  padding: 10px 14px;
+  border-radius: 999px;
+  box-shadow: 0 12px 24px rgba(24, 18, 12, 0.1);
 }
 
 .card {
   background: #ffffff;
-  border-radius: 16px;
+  border-radius: 18px;
   padding: 20px;
-  margin-bottom: 18px;
-  box-shadow: 0 12px 30px rgba(24, 18, 12, 0.08);
+  box-shadow: 0 14px 30px rgba(24, 18, 12, 0.08);
 }
 
 .card.small {
   max-width: 360px;
+}
+
+.auth-card {
+  max-width: 520px;
 }
 
 label {
@@ -52,9 +75,10 @@ label {
 input,
 textarea {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid #d2ccc2;
   font-size: 14px;
+  font-family: inherit;
 }
 
 textarea {
@@ -64,7 +88,7 @@ textarea {
 
 button {
   border: none;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 10px 14px;
   font-weight: 600;
   background: #2f312d;
@@ -87,21 +111,113 @@ button:disabled {
   gap: 12px;
   align-items: center;
   margin-top: 12px;
+  flex-wrap: wrap;
 }
 
-.row.space {
+.note {
+  color: #6d675f;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 20px;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.tabs button {
+  background: #efe8dd;
+  color: #443f37;
+}
+
+.tabs button.active {
+  background: #2f312d;
+  color: #fff;
+}
+
+.conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversation {
+  border-radius: 14px;
+  padding: 10px 12px;
+  text-align: left;
+  background: #f6f2ea;
+  color: #2f312d;
+  display: grid;
+  gap: 6px;
+}
+
+.conversation.active {
+  background: #2f312d;
+  color: #fff;
+}
+
+.conversation .title {
+  font-weight: 600;
+}
+
+.conversation .meta {
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.divider {
+  height: 1px;
+  background: #e2ddd4;
+}
+
+.create-block {
+  display: grid;
+  gap: 10px;
+}
+
+.main {
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.thread-header {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
 }
 
-.grid {
-  display: grid;
-  gap: 16px;
-  margin-top: 16px;
+.thread-type {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #efe8dd;
+  color: #5b554d;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .messages {
   display: grid;
   gap: 12px;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .message {
@@ -120,28 +236,97 @@ button:disabled {
 
 .message .text {
   font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.attachment {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.attachment img {
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+.file-name {
+  font-size: 12px;
+  color: #6d675f;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.file-input {
+  background: #efe8dd;
+  padding: 8px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #443f37;
+}
+
+.file-input input {
+  display: none;
+}
+
+.attachments-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #5b554d;
+}
+
+.empty {
+  text-align: center;
+  color: #7a736b;
+  margin-top: 80px;
 }
 
 .status {
-  margin-top: 12px;
+  margin-top: 14px;
   padding: 12px 16px;
   background: #fff1d4;
   border-radius: 12px;
 }
 
-.note {
-  color: #6d675f;
+.muted {
+  color: #7a736b;
   font-size: 13px;
-  margin-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    order: 2;
+  }
+
+  .main {
+    order: 1;
+  }
 }
 
 @media (max-width: 600px) {
-  .row {
+  .topbar {
     flex-direction: column;
-    align-items: stretch;
+    align-items: flex-start;
   }
 
-  .card.small {
-    max-width: 100%;
+  .tabs {
+    grid-template-columns: 1fr;
   }
 }

@@ -13,11 +13,15 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${authToken}` };
 }
 
-export async function signup(username: string, publicKey: string) {
+export async function signup(
+  username: string,
+  password: string,
+  publicKey: string
+) {
   const response = await fetch(`${API_BASE}/api/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, publicKey })
+    body: JSON.stringify({ username, password, publicKey })
   });
 
   if (!response.ok) {
@@ -27,11 +31,11 @@ export async function signup(username: string, publicKey: string) {
   return response.json();
 }
 
-export async function login(username: string) {
+export async function login(username: string, password: string) {
   const response = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username })
+    body: JSON.stringify({ username, password })
   });
 
   if (!response.ok) {
@@ -49,10 +53,61 @@ export async function fetchPublicKey(username: string) {
   return response.json();
 }
 
+export async function listConversations() {
+  const response = await fetch(`${API_BASE}/api/conversations`, {
+    headers: {
+      ...authHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Load conversations failed");
+  }
+
+  return response.json();
+}
+
+export async function createConversation(
+  type: "direct" | "group" | "channel",
+  name: string | null,
+  members: string[]
+) {
+  const response = await fetch(`${API_BASE}/api/conversations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ type, name, members })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Create failed");
+  }
+
+  return response.json();
+}
+
+export async function fetchMembers(conversationId: number) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/members`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Load members failed");
+  }
+
+  return response.json();
+}
+
 export async function sendMessage(
-  toUsername: string,
-  ciphertext: string,
-  nonce: string
+  conversationId: number,
+  payloads: Array<{ toUsername: string; ciphertext: string; nonce: string }>
 ) {
   const response = await fetch(`${API_BASE}/api/messages/send`, {
     method: "POST",
@@ -60,7 +115,7 @@ export async function sendMessage(
       "Content-Type": "application/json",
       ...authHeaders()
     },
-    body: JSON.stringify({ toUsername, ciphertext, nonce })
+    body: JSON.stringify({ conversationId, payloads })
   });
 
   if (!response.ok) {
