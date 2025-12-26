@@ -1,0 +1,20 @@
+{
+  "name": "messager-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/cors": "^8.5.0",
+    "fastify": "^4.26.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.20",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}
