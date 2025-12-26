@@ -64,6 +64,22 @@ function getConversationTitle(conversation: Conversation, self: string): string 
   return conversation.name || "Untitled";
 }
 
+function getPreview(payload: MessagePayload): string {
+  const trimmed = payload.text.trim();
+  if (trimmed) {
+    return trimmed.length > 40 ? `${trimmed.slice(0, 40)}…` : trimmed;
+  }
+  if (payload.attachments.length === 0) {
+    return "";
+  }
+  const first = payload.attachments[0].kind;
+  const label = first === "image" ? "Image" : "Audio";
+  if (payload.attachments.length === 1) {
+    return `[${label}]`;
+  }
+  return `[${label} +${payload.attachments.length - 1}]`;
+}
+
 function parsePayload(text: string): MessagePayload {
   try {
     const parsed = JSON.parse(text) as MessagePayload;
@@ -99,16 +115,33 @@ export default function App() {
   const [messageText, setMessageText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [unreadByConversation, setUnreadByConversation] = useState<
+    Record<number, number>
+  >({});
+  const [lastMessageByConversation, setLastMessageByConversation] = useState<
+    Record<number, { sender: string; payload: MessagePayload; createdAt: number }>
+  >({});
   const [status, setStatus] = useState<string | null>(null);
   const [directUsername, setDirectUsername] = useState("");
   const [groupName, setGroupName] = useState("");
   const [groupMembers, setGroupMembers] = useState("");
 
   const lastPollRef = useRef(0);
+  const selectedConversationRef = useRef<number | null>(null);
 
   useEffect(() => {
     setAuthToken(token || null);
   }, [token]);
+
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversationId;
+    if (selectedConversationId) {
+      setUnreadByConversation((prev) => ({
+        ...prev,
+        [selectedConversationId]: 0
+      }));
+    }
+  }, [selectedConversationId]);
 
   const privateKeyPromise = useMemo(() => {
     if (!privateKey) {
@@ -182,6 +215,26 @@ export default function App() {
         }
 
         setMessages((prev) => [...prev, ...decrypted]);
+        setUnreadByConversation((prev) => {
+          const next = { ...prev };
+          for (const msg of decrypted) {
+            if (msg.conversationId !== selectedConversationRef.current) {
+              next[msg.conversationId] = (next[msg.conversationId] || 0) + 1;
+            }
+          }
+          return next;
+        });
+        setLastMessageByConversation((prev) => {
+          const next = { ...prev };
+          for (const msg of decrypted) {
+            next[msg.conversationId] = {
+              sender: msg.sender,
+              payload: msg.payload,
+              createdAt: msg.createdAt
+            };
+          }
+          return next;
+        });
         lastPollRef.current = data.messages[data.messages.length - 1].created_at;
       } catch (error) {
         setStatus((error as Error).message);
@@ -305,6 +358,14 @@ export default function App() {
           createdAt: Date.now()
         }
       ]);
+      setLastMessageByConversation((prev) => ({
+        ...prev,
+        [conversation.id]: {
+          sender: sessionUsername,
+          payload,
+          createdAt: Date.now()
+        }
+      }));
       setMessageText("");
       setAttachments([]);
     } catch (error) {
@@ -473,7 +534,16 @@ export default function App() {
                     {getConversationTitle(conv, sessionUsername)}
                   </div>
                   <div className="meta">
-                    {conv.members.map((member) => member.username).join(", ")}
+                    <span className="preview">
+                      {lastMessageByConversation[conv.id]
+                        ? `${lastMessageByConversation[conv.id].sender}: ${getPreview(
+                            lastMessageByConversation[conv.id].payload
+                          )}`
+                        : conv.members.map((member) => member.username).join(", ")}
+                    </span>
+                    {unreadByConversation[conv.id] ? (
+                      <span className="badge">{unreadByConversation[conv.id]}</span>
+                    ) : null}
                   </div>
                 </button>
               ))}
