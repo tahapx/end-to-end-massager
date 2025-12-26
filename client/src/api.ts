@@ -80,6 +80,51 @@ export async function fetchPublicKey(username: string) {
   return response.json();
 }
 
+export async function fetchPublicProfile(username: string) {
+  const response = await fetch(`${API_BASE}/api/users/${username}/profile`);
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Profile not available");
+  }
+  return response.json();
+}
+
+export async function fetchProfile() {
+  const response = await fetch(`${API_BASE}/api/profile`, {
+    headers: {
+      ...authHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Profile load failed");
+  }
+
+  return response.json();
+}
+
+export async function updateProfile(payload: {
+  avatar?: string | null;
+  bio?: string;
+  profilePublic?: boolean;
+  allowDirect?: boolean;
+  allowGroupInvite?: boolean;
+}) {
+  const response = await fetch(`${API_BASE}/api/profile`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Profile update failed");
+  }
+
+  return response.json();
+}
+
 export async function listConversations() {
   const response = await fetch(`${API_BASE}/api/conversations`, {
     headers: {

@@ -7,14 +7,6 @@ import {
   type ChangeEvent
 } from "react";
 import {
-  decryptMessage,
-  deriveSharedKey,
-  encryptMessage,
-  generateKeyPair,
-  importPrivateKey,
-  importPublicKey
-} from "./crypto";
-import {
   adminDeleteConversation,
   adminDeleteUser,
   adminListConversations,
@@ -26,6 +18,8 @@ import {
   createConversation,
   deleteMessage,
   fetchMembers,
+  fetchProfile,
+  fetchPublicProfile,
   fetchTyping,
   listConversations,
   login,
@@ -36,8 +30,17 @@ import {
   setAdminToken,
   setAuthToken,
   setTyping,
-  signup
+  signup,
+  updateProfile
 } from "./api";
+import {
+  decryptMessage,
+  deriveSharedKey,
+  encryptMessage,
+  generateKeyPair,
+  importPrivateKey,
+  importPublicKey
+} from "./crypto";
 
 const STORAGE_KEYS = {
   username: "messager.username",
@@ -45,10 +48,11 @@ const STORAGE_KEYS = {
   privateKey: "messager.privateKey",
   token: "messager.token",
   pinnedPrefix: "messager.pinned.",
-  starredPrefix: "messager.starred."
+  starredPrefix: "messager.starred.",
+  settingsPrefix: "messager.settings."
 };
 
-const MAX_ATTACHMENT_SIZE = 2 * 1024 * 1024;
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 
 type Attachment = {
   kind: "image" | "audio";
@@ -89,6 +93,8 @@ type UserFlags = {
   banned: boolean;
   canSend: boolean;
   canCreate: boolean;
+  allowDirect: boolean;
+  allowGroupInvite: boolean;
 };
 
 type AdminUser = {
@@ -98,6 +104,11 @@ type AdminUser = {
   banned: boolean;
   canSend: boolean;
   canCreate: boolean;
+  allowDirect: boolean;
+  allowGroupInvite: boolean;
+  avatar: string | null;
+  bio: string | null;
+  profilePublic: boolean;
   profile: {
     last_ip: string;
     last_user_agent: string;
@@ -115,6 +126,19 @@ type AdminConversation = {
   ownerId: number;
   createdAt: number;
   members: string[];
+};
+
+type ProfileState = {
+  avatar: string | null;
+  bio: string;
+  profilePublic: boolean;
+  allowDirect: boolean;
+  allowGroupInvite: boolean;
+};
+
+type PublicProfile = {
+  avatar: string | null;
+  bio: string | null;
 };
 
 const tabs: Array<Conversation["type"]> = ["group", "channel", "direct"];
@@ -172,7 +196,23 @@ function getDeviceInfo() {
   };
 }
 
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function getInitials(username: string): string {
+  return username.slice(0, 2).toUpperCase();
+}
+
 export default function App() {
+  const [adminRoute, setAdminRoute] = useState(
+    window.location.hash === "#admin"
+  );
+  const [showSettings, setShowSettings] = useState(false);
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [sessionUsername, setSessionUsername] = useState(
@@ -190,17 +230,21 @@ export default function App() {
   const [userFlags, setUserFlags] = useState<UserFlags>({
     banned: false,
     canSend: true,
-    canCreate: true
+    canCreate: true,
+    allowDirect: true,
+    allowGroupInvite: true
   });
-  const [authMode, setAuthMode] = useState<"user" | "admin">("user");
-  const [adminUsername, setAdminUsername] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminTokenState, setAdminTokenState] = useState<string | null>(null);
-  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [adminConversations, setAdminConversations] = useState<
-    AdminConversation[]
-  >([]);
-  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [profileState, setProfileState] = useState<ProfileState>({
+    avatar: null,
+    bio: "",
+    profilePublic: true,
+    allowDirect: true,
+    allowGroupInvite: true
+  });
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [publicProfiles, setPublicProfiles] = useState<
+    Record<string, PublicProfile>
+  >({});
 
   const [tab, setTab] = useState<Conversation["type"]>("group");
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -233,10 +277,27 @@ export default function App() {
     Record<string, StatusRow>
   >({});
 
+  const [adminUsername, setAdminUsername] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminTokenState, setAdminTokenState] = useState<string | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminConversations, setAdminConversations] = useState<
+    AdminConversation[]
+  >([]);
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+
   const lastPollRef = useRef(0);
   const lastStatusPollRef = useRef(0);
   const selectedConversationRef = useRef<number | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      setAdminRoute(window.location.hash === "#admin");
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   useEffect(() => {
     setAuthToken(token || null);
@@ -319,6 +380,23 @@ export default function App() {
     }
     refreshAdminData();
   }, [isAdmin]);
+  useEffect(() => {
+    if (!isLoggedIn) {
+      return;
+    }
+    fetchProfile()
+      .then((data) => {
+        setProfileState({
+          avatar: data.avatar ?? null,
+          bio: data.bio || "",
+          profilePublic: Boolean(data.profilePublic),
+          allowDirect: Boolean(data.allowDirect),
+          allowGroupInvite: Boolean(data.allowGroupInvite)
+        });
+      })
+      .catch(() => undefined);
+  }, [isLoggedIn]);
+
   useEffect(() => {
     if (!token || !privateKeyPromise) {
       return undefined;
@@ -491,6 +569,33 @@ export default function App() {
       clearInterval(interval);
     };
   }, [selectedConversationId, token]);
+  useEffect(() => {
+    if (!conversations.length) {
+      return;
+    }
+    const directUsers = conversations
+      .filter((conv) => conv.type === "direct")
+      .map((conv) => getConversationTitle(conv, sessionUsername))
+      .filter((name) => name && name !== "Direct" && name !== sessionUsername);
+
+    directUsers.forEach((name) => {
+      if (publicProfiles[name]) {
+        return;
+      }
+      fetchPublicProfile(name)
+        .then((data) => {
+          setPublicProfiles((prev) => ({
+            ...prev,
+            [name]: {
+              avatar: data.avatar ?? null,
+              bio: data.bio ?? null
+            }
+          }));
+        })
+        .catch(() => undefined);
+    });
+  }, [conversations, sessionUsername, publicProfiles]);
+
   const handleSignup = async () => {
     setStatus(null);
     try {
@@ -504,7 +609,16 @@ export default function App() {
       setUserFlags({
         banned: data.banned,
         canSend: data.canSend,
-        canCreate: data.canCreate
+        canCreate: data.canCreate,
+        allowDirect: data.allowDirect,
+        allowGroupInvite: data.allowGroupInvite
+      });
+      setProfileState({
+        avatar: data.avatar ?? null,
+        bio: data.bio || "",
+        profilePublic: Boolean(data.profilePublic),
+        allowDirect: Boolean(data.allowDirect),
+        allowGroupInvite: Boolean(data.allowGroupInvite)
       });
 
       localStorage.setItem(STORAGE_KEYS.username, data.username);
@@ -513,6 +627,7 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.privateKey, keys.privateKey);
 
       setStatus("Signup complete");
+      setShowSettings(false);
     } catch (error) {
       setStatus((error as Error).message);
     }
@@ -532,12 +647,22 @@ export default function App() {
       setUserFlags({
         banned: data.banned,
         canSend: data.canSend,
-        canCreate: data.canCreate
+        canCreate: data.canCreate,
+        allowDirect: data.allowDirect,
+        allowGroupInvite: data.allowGroupInvite
+      });
+      setProfileState({
+        avatar: data.avatar ?? null,
+        bio: data.bio || "",
+        profilePublic: Boolean(data.profilePublic),
+        allowDirect: Boolean(data.allowDirect),
+        allowGroupInvite: Boolean(data.allowGroupInvite)
       });
       localStorage.setItem(STORAGE_KEYS.username, data.username);
       localStorage.setItem(STORAGE_KEYS.token, data.token);
 
       setStatus("Login complete");
+      setShowSettings(false);
     } catch (error) {
       setStatus((error as Error).message);
     }
@@ -579,14 +704,18 @@ export default function App() {
 
   const handleAdminToggle = async (
     user: AdminUser,
-    key: "banned" | "canSend" | "canCreate"
+    key: "banned" | "canSend" | "canCreate" | "allowDirect" | "allowGroupInvite"
   ) => {
     setStatus(null);
     try {
       const payload = {
         banned: key === "banned" ? !user.banned : user.banned,
         canSend: key === "canSend" ? !user.canSend : user.canSend,
-        canCreate: key === "canCreate" ? !user.canCreate : user.canCreate
+        canCreate: key === "canCreate" ? !user.canCreate : user.canCreate,
+        allowDirect:
+          key === "allowDirect" ? !user.allowDirect : user.allowDirect,
+        allowGroupInvite:
+          key === "allowGroupInvite" ? !user.allowGroupInvite : user.allowGroupInvite
       };
       await adminUpdateUserFlags(user.id, payload);
       await refreshAdminData();
@@ -637,6 +766,53 @@ export default function App() {
     }
   };
 
+  const handleProfileSave = async () => {
+    setProfileSaving(true);
+    setStatus(null);
+    try {
+      await updateProfile({
+        avatar: profileState.avatar,
+        bio: profileState.bio,
+        profilePublic: profileState.profilePublic,
+        allowDirect: profileState.allowDirect,
+        allowGroupInvite: profileState.allowGroupInvite
+      });
+      setUserFlags((prev) => ({
+        ...prev,
+        allowDirect: profileState.allowDirect,
+        allowGroupInvite: profileState.allowGroupInvite
+      }));
+      setStatus("Profile updated");
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleAvatarChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setStatus("Avatar too large (max 2MB).");
+      return;
+    }
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    });
+    setProfileState((prev) => ({ ...prev, avatar: data }));
+    event.target.value = "";
+  };
+
+  const handleClearAvatar = () => {
+    setProfileState((prev) => ({ ...prev, avatar: null }));
+  };
+
   const handleSend = async () => {
     if (!privateKeyPromise || !selectedConversationId) {
       return;
@@ -646,11 +822,6 @@ export default function App() {
       (item) => item.id === selectedConversationId
     );
     if (!conversation) {
-      return;
-    }
-
-    if (userFlags.banned || !userFlags.canSend) {
-      setStatus("You are restricted from sending messages.");
       return;
     }
 
@@ -747,10 +918,6 @@ export default function App() {
 
   const handleCreateConversation = async () => {
     setStatus(null);
-    if (userFlags.banned || !userFlags.canCreate) {
-      setStatus("You are restricted from creating conversations.");
-      return;
-    }
     try {
       if (tab === "direct") {
         await createConversation("direct", null, [directUsername]);
@@ -781,7 +948,7 @@ export default function App() {
 
     for (const file of Array.from(files)) {
       if (file.size > MAX_ATTACHMENT_SIZE) {
-        setStatus(`File ${file.name} is too large (max 2MB).`);
+        setStatus(`File ${file.name} is too large (max 10MB).`);
         continue;
       }
 
@@ -938,43 +1105,16 @@ export default function App() {
       <header className="topbar">
         <div>
           <h1>Messager</h1>
-          <p>Secure chats with E2E encryption (MVP).</p>
+          <p>Encrypted chat, WhatsApp-style.</p>
         </div>
-        <div className="top-actions">
-          <div className="mode-switch">
-            <button
-              className={authMode === "user" ? "active" : ""}
-              onClick={() => setAuthMode("user")}
-            >
-              User
-            </button>
-            <button
-              className={authMode === "admin" ? "active" : ""}
-              onClick={() => setAuthMode("admin")}
-            >
-              Admin
-            </button>
-          </div>
-          {isLoggedIn && authMode === "user" && (
-            <div className="user-pill">
-              <span>{sessionUsername}</span>
-              <button className="secondary" onClick={handleLogout}>
-                Log out
-              </button>
-            </div>
-          )}
-          {isAdmin && authMode === "admin" && (
-            <div className="user-pill">
-              <span>Admin</span>
-              <button className="secondary" onClick={handleAdminLogout}>
-                Log out
-              </button>
-            </div>
-          )}
-        </div>
+        {isLoggedIn && !adminRoute && (
+          <button className="ghost" onClick={() => setShowSettings((v) => !v)}>
+            {showSettings ? "Back to chats" : "Settings"}
+          </button>
+        )}
       </header>
 
-      {authMode === "admin" && !isAdmin && (
+      {adminRoute && !isAdmin && (
         <section className="card auth-card">
           <h2>Admin Access</h2>
           <label>
@@ -999,16 +1139,17 @@ export default function App() {
               Admin login
             </button>
           </div>
-          <p className="note">
-            Default admin: myadmin / 000123 (change after login).
-          </p>
+          <p className="note">Default admin: myadmin / 000123</p>
         </section>
       )}
 
-      {authMode === "admin" && isAdmin && (
+      {adminRoute && isAdmin && (
         <section className="admin-panel card">
           <div className="admin-header">
-            <h2>Admin Panel</h2>
+            <div>
+              <h2>Admin Panel</h2>
+              <p className="muted">Moderation, users, and conversations.</p>
+            </div>
             <div className="row">
               <input
                 value={newAdminPassword}
@@ -1024,6 +1165,9 @@ export default function App() {
               </button>
               <button className="secondary" onClick={refreshAdminData}>
                 Refresh
+              </button>
+              <button className="secondary" onClick={handleAdminLogout}>
+                Log out
               </button>
             </div>
           </div>
@@ -1051,6 +1195,12 @@ export default function App() {
                         <span className={user.canCreate ? "tag" : "tag warn"}>
                           Create {user.canCreate ? "On" : "Off"}
                         </span>
+                        <span className={user.allowDirect ? "tag" : "tag warn"}>
+                          Direct {user.allowDirect ? "On" : "Off"}
+                        </span>
+                        <span className={user.allowGroupInvite ? "tag" : "tag warn"}>
+                          Invites {user.allowGroupInvite ? "On" : "Off"}
+                        </span>
                       </div>
                     </div>
                     {user.profile && (
@@ -1070,6 +1220,12 @@ export default function App() {
                       </button>
                       <button onClick={() => handleAdminToggle(user, "canCreate")}>
                         {user.canCreate ? "Disable Create" : "Enable Create"}
+                      </button>
+                      <button onClick={() => handleAdminToggle(user, "allowDirect")}>
+                        {user.allowDirect ? "Disable Direct" : "Enable Direct"}
+                      </button>
+                      <button onClick={() => handleAdminToggle(user, "allowGroupInvite")}>
+                        {user.allowGroupInvite ? "Disable Invites" : "Enable Invites"}
                       </button>
                       <button
                         className="secondary"
@@ -1120,7 +1276,7 @@ export default function App() {
         </section>
       )}
 
-      {authMode === "user" && !isLoggedIn && (
+      {!adminRoute && !isLoggedIn && (
         <section className="card auth-card">
           <h2>Access</h2>
           <label>
@@ -1154,9 +1310,23 @@ export default function App() {
         </section>
       )}
 
-      {authMode === "user" && isLoggedIn && (
+      {!adminRoute && isLoggedIn && (
         <div className="layout">
           <aside className="sidebar card">
+            <div className="profile-card">
+              <div className="avatar">
+                {profileState.avatar ? (
+                  <img src={profileState.avatar} alt="avatar" />
+                ) : (
+                  <span>{getInitials(sessionUsername)}</span>
+                )}
+              </div>
+              <div>
+                <div className="profile-name">{sessionUsername}</div>
+                <div className="muted">{profileState.bio || "No bio yet"}</div>
+              </div>
+            </div>
+
             <div className="tabs">
               {tabs.map((item) => (
                 <button
@@ -1173,47 +1343,60 @@ export default function App() {
               className="search"
               value={conversationQuery}
               onChange={(event) => setConversationQuery(event.target.value)}
-              placeholder="Search conversations"
+              placeholder="Search chats"
             />
 
             <div className="conversation-list">
               {sortedConversations.length === 0 && (
                 <p className="muted">No conversations yet.</p>
               )}
-              {sortedConversations.map((conv) => (
-                <button
-                  key={conv.id}
-                  className={
-                    conv.id === selectedConversationId
-                      ? "conversation active"
-                      : "conversation"
-                  }
-                  onClick={() => setSelectedConversationId(conv.id)}
-                >
-                  <div className="title">
-                    {getConversationTitle(conv, sessionUsername)}
-                    <span className="time">
-                      {lastMessageByConversation[conv.id]
-                        ? new Date(
-                            lastMessageByConversation[conv.id].createdAt
-                          ).toLocaleTimeString()
-                        : ""}
-                    </span>
-                  </div>
-                  <div className="meta">
-                    <span className="preview">
-                      {lastMessageByConversation[conv.id]
-                        ? `${lastMessageByConversation[conv.id].sender}: ${getPreview(
-                            lastMessageByConversation[conv.id].payload
-                          )}`
-                        : conv.members.map((member) => member.username).join(", ")}
-                    </span>
-                    {unreadByConversation[conv.id] ? (
-                      <span className="badge">{unreadByConversation[conv.id]}</span>
-                    ) : null}
-                  </div>
-                </button>
-              ))}
+              {sortedConversations.map((conv) => {
+                const title = getConversationTitle(conv, sessionUsername);
+                const profile = publicProfiles[title];
+                return (
+                  <button
+                    key={conv.id}
+                    className={
+                      conv.id === selectedConversationId
+                        ? "conversation active"
+                        : "conversation"
+                    }
+                    onClick={() => setSelectedConversationId(conv.id)}
+                  >
+                    <div className="conversation-left">
+                      <div className="avatar small">
+                        {profile?.avatar ? (
+                          <img src={profile.avatar} alt={title} />
+                        ) : (
+                          <span>{getInitials(title)}</span>
+                        )}
+                      </div>
+                      <div>
+                        <div className="title">{title}</div>
+                        <div className="meta">
+                          {lastMessageByConversation[conv.id]
+                            ? `${lastMessageByConversation[conv.id].sender}: ${getPreview(
+                                lastMessageByConversation[conv.id].payload
+                              )}`
+                            : conv.members.map((member) => member.username).join(", ")}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="conversation-right">
+                      <span className="time">
+                        {lastMessageByConversation[conv.id]
+                          ? formatTime(
+                              lastMessageByConversation[conv.id].createdAt
+                            )
+                          : ""}
+                      </span>
+                      {unreadByConversation[conv.id] ? (
+                        <span className="badge">{unreadByConversation[conv.id]}</span>
+                      ) : null}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="divider" />
@@ -1254,13 +1437,100 @@ export default function App() {
                 Create
               </button>
             </div>
+
+            <button className="secondary" onClick={handleLogout}>
+              Log out
+            </button>
           </aside>
 
           <main className="main card">
-            {!selectedConversation && (
+            {showSettings && (
+              <div className="settings">
+                <h2>Profile & Settings</h2>
+                <div className="settings-grid">
+                  <div className="avatar-panel">
+                    <div className="avatar large">
+                      {profileState.avatar ? (
+                        <img src={profileState.avatar} alt="avatar" />
+                      ) : (
+                        <span>{getInitials(sessionUsername)}</span>
+                      )}
+                    </div>
+                    <div className="row">
+                      <label className="file-input">
+                        Upload
+                        <input type="file" accept="image/*" onChange={handleAvatarChange} />
+                      </label>
+                      <button className="secondary" onClick={handleClearAvatar}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  <div className="settings-form">
+                    <label>
+                      Bio
+                      <textarea
+                        value={profileState.bio}
+                        onChange={(event) =>
+                          setProfileState((prev) => ({
+                            ...prev,
+                            bio: event.target.value
+                          }))
+                        }
+                        placeholder="Tell people about you"
+                      />
+                    </label>
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={profileState.profilePublic}
+                        onChange={(event) =>
+                          setProfileState((prev) => ({
+                            ...prev,
+                            profilePublic: event.target.checked
+                          }))
+                        }
+                      />
+                      <span>Profile is public</span>
+                    </label>
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={profileState.allowDirect}
+                        onChange={(event) =>
+                          setProfileState((prev) => ({
+                            ...prev,
+                            allowDirect: event.target.checked
+                          }))
+                        }
+                      />
+                      <span>Allow direct messages</span>
+                    </label>
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={profileState.allowGroupInvite}
+                        onChange={(event) =>
+                          setProfileState((prev) => ({
+                            ...prev,
+                            allowGroupInvite: event.target.checked
+                          }))
+                        }
+                      />
+                      <span>Allow group invites</span>
+                    </label>
+                    <button onClick={handleProfileSave} disabled={profileSaving}>
+                      {profileSaving ? "Saving..." : "Save settings"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!showSettings && !selectedConversation && (
               <div className="empty">Select a conversation to start.</div>
             )}
-            {selectedConversation && (
+            {!showSettings && selectedConversation && (
               <>
                 <div className="thread-header">
                   <div>
@@ -1277,18 +1547,6 @@ export default function App() {
                     {selectedConversation.type}
                   </span>
                 </div>
-
-                {userFlags.banned && (
-                  <div className="warning">
-                    Your account is banned. You can view messages but cannot send.
-                  </div>
-                )}
-
-                {!userFlags.banned && !userFlags.canSend && (
-                  <div className="warning">
-                    Sending messages is disabled for your account.
-                  </div>
-                )}
 
                 <input
                   className="search"
@@ -1314,11 +1572,18 @@ export default function App() {
                     <p className="muted">No messages yet.</p>
                   )}
                   {searchedMessages.map((msg) => (
-                    <div key={msg.id} className="message">
+                    <div
+                      key={msg.id}
+                      className={
+                        msg.sender === sessionUsername
+                          ? "message own"
+                          : "message"
+                      }
+                    >
                       <div className="meta">
                         <span>{msg.sender}</span>
                         <span className="meta-right">
-                          <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
+                          <span>{formatTime(msg.createdAt)}</span>
                           {msg.sender === sessionUsername && (
                             <span className="tick">{getStatusMark(msg.groupId)}</span>
                           )}
@@ -1401,8 +1666,7 @@ export default function App() {
                       setMessageText(event.target.value);
                       handleTyping();
                     }}
-                    placeholder="Type your message"
-                    disabled={userFlags.banned || !userFlags.canSend}
+                    placeholder="Type a message"
                   />
                   <div className="composer-actions">
                     <label className="file-input">
@@ -1412,16 +1676,13 @@ export default function App() {
                         multiple
                         accept="image/*,audio/*"
                         onChange={handleAttachmentChange}
-                        disabled={userFlags.banned || !userFlags.canSend}
                       />
                     </label>
                     <button
                       onClick={handleSend}
                       disabled={
                         (!messageText && attachments.length === 0) ||
-                        !selectedConversationId ||
-                        userFlags.banned ||
-                        !userFlags.canSend
+                        !selectedConversationId
                       }
                     >
                       Send
@@ -1442,14 +1703,6 @@ export default function App() {
       )}
 
       {status && <div className="status">{status}</div>}
-
-      {authMode === "user" && isLoggedIn && (
-        <section className="card small">
-          <h3>Keys</h3>
-          <p>Public key stored on server: {publicKey ? "yes" : "no"}</p>
-          <p>Private key stored locally: {privateKey ? "yes" : "no"}</p>
-        </section>
-      )}
 
       {lightboxSrc && (
         <div className="lightbox" onClick={() => setLightboxSrc(null)}>

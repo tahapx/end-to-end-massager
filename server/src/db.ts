@@ -14,6 +14,11 @@ export type UserRow = {
   banned: boolean;
   can_send: boolean;
   can_create: boolean;
+  avatar: string | null;
+  bio: string | null;
+  profile_public: boolean;
+  allow_direct: boolean;
+  allow_group_invite: boolean;
 };
 
 export type SessionRow = {
@@ -185,7 +190,12 @@ export function createUser(
     created_at: createdAt,
     banned: false,
     can_send: true,
-    can_create: true
+    can_create: true,
+    avatar: null,
+    bio: null,
+    profile_public: true,
+    allow_direct: true,
+    allow_group_invite: true
   };
   db.nextIds.users += 1;
   db.users.push(user);
@@ -210,7 +220,12 @@ export function listUsers(): UserRow[] {
 
 export function updateUserFlags(
   userId: number,
-  updates: Partial<Pick<UserRow, "banned" | "can_send" | "can_create">>
+  updates: Partial<
+    Pick<
+      UserRow,
+      "banned" | "can_send" | "can_create" | "allow_direct" | "allow_group_invite"
+    >
+  >
 ): UserRow | null {
   const db = loadDb();
   const user = db.users.find((item) => item.id === userId);
@@ -225,6 +240,12 @@ export function updateUserFlags(
   }
   if (typeof updates.can_create === "boolean") {
     user.can_create = updates.can_create;
+  }
+  if (typeof updates.allow_direct === "boolean") {
+    user.allow_direct = updates.allow_direct;
+  }
+  if (typeof updates.allow_group_invite === "boolean") {
+    user.allow_group_invite = updates.allow_group_invite;
   }
   saveDb(db);
   return user;
@@ -244,6 +265,39 @@ export function updateUserPassword(
   user.password_salt = passwordSalt;
   saveDb(db);
   return true;
+}
+
+export function updateUserAccount(
+  userId: number,
+  updates: Partial<
+    Pick<
+      UserRow,
+      "avatar" | "bio" | "profile_public" | "allow_direct" | "allow_group_invite"
+    >
+  >
+): UserRow | null {
+  const db = loadDb();
+  const user = db.users.find((item) => item.id === userId);
+  if (!user) {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "avatar")) {
+    user.avatar = updates.avatar ?? null;
+  }
+  if (typeof updates.bio === "string") {
+    user.bio = updates.bio;
+  }
+  if (typeof updates.profile_public === "boolean") {
+    user.profile_public = updates.profile_public;
+  }
+  if (typeof updates.allow_direct === "boolean") {
+    user.allow_direct = updates.allow_direct;
+  }
+  if (typeof updates.allow_group_invite === "boolean") {
+    user.allow_group_invite = updates.allow_group_invite;
+  }
+  saveDb(db);
+  return user;
 }
 
 export function deleteUserAndData(userId: number): boolean {

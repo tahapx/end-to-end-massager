@@ -17,6 +17,7 @@ License: MIT (change if needed)
 - Encrypted image/audio attachments (base64)
 - Admin panel for moderation (ban, limits, delete users/channels)
 - User profile logging (IP + device info per username file)
+- Profile photo + bio + privacy controls
 
 ## Tech stack
 
@@ -89,6 +90,8 @@ Default admin credentials:
 - Password: `000123`
 
 Change the admin password after first login in the admin panel.
+
+Admin panel is accessed at `/#admin` (not shown in the regular UI).
 
 ## Local testing tip
 

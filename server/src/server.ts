@@ -26,6 +26,7 @@ import {
   markRead,
   pollMessages,
   updateAdminPassword,
+  updateUserAccount,
   updateUserFlags,
   updateUserPassword,
   findAdminSession,
@@ -125,7 +126,12 @@ server.post("/api/auth/signup", async (request, reply) => {
     username: user.username,
     banned: user.banned,
     canSend: user.can_send,
-    canCreate: user.can_create
+    canCreate: user.can_create,
+    avatar: user.avatar,
+    bio: user.bio,
+    profilePublic: user.profile_public,
+    allowDirect: user.allow_direct,
+    allowGroupInvite: user.allow_group_invite
   };
 });
 
@@ -173,7 +179,12 @@ server.post("/api/auth/login", async (request, reply) => {
     username: user.username,
     banned: user.banned,
     canSend: user.can_send,
-    canCreate: user.can_create
+    canCreate: user.can_create,
+    avatar: user.avatar,
+    bio: user.bio,
+    profilePublic: user.profile_public,
+    allowDirect: user.allow_direct,
+    allowGroupInvite: user.allow_group_invite
   };
 });
 
@@ -184,6 +195,72 @@ server.get("/api/users/:username/public-key", async (request, reply) => {
     return reply.status(404).send({ error: "user not found" });
   }
   return { username: user.username, publicKey: user.public_key };
+});
+
+server.get("/api/users/:username/profile", async (request, reply) => {
+  const { username } = request.params as { username: string };
+  const user = findUserByUsername(username);
+  if (!user) {
+    return reply.status(404).send({ error: "user not found" });
+  }
+  if (!user.profile_public) {
+    return reply.status(403).send({ error: "profile not public" });
+  }
+  return {
+    username: user.username,
+    avatar: user.avatar,
+    bio: user.bio
+  };
+});
+
+server.get("/api/profile", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+  const user = findUserById(userId);
+  if (!user) {
+    return reply.status(404).send({ error: "user not found" });
+  }
+  return {
+    username: user.username,
+    avatar: user.avatar,
+    bio: user.bio,
+    profilePublic: user.profile_public,
+    allowDirect: user.allow_direct,
+    allowGroupInvite: user.allow_group_invite
+  };
+});
+
+server.post("/api/profile", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+  const body = request.body as {
+    avatar?: string | null;
+    bio?: string;
+    profilePublic?: boolean;
+    allowDirect?: boolean;
+    allowGroupInvite?: boolean;
+  };
+
+  const updated = updateUserAccount(userId, {
+    avatar:
+      typeof body.avatar === "string" || body.avatar === null
+        ? body.avatar
+        : undefined,
+    bio: typeof body.bio === "string" ? body.bio : undefined,
+    profile_public: typeof body.profilePublic === "boolean" ? body.profilePublic : undefined,
+    allow_direct: typeof body.allowDirect === "boolean" ? body.allowDirect : undefined,
+    allow_group_invite: typeof body.allowGroupInvite === "boolean" ? body.allowGroupInvite : undefined
+  });
+
+  if (!updated) {
+    return reply.status(404).send({ error: "user not found" });
+  }
+
+  return { ok: true };
 });
 
 server.get("/api/conversations", async (request, reply) => {
@@ -250,10 +327,26 @@ server.post("/api/conversations", async (request, reply) => {
   const uniqueMembers = Array.from(new Set(members)).filter(Boolean);
   const memberUsers = uniqueMembers
     .map((memberUsername) => findUserByUsername(memberUsername))
-    .filter(Boolean) as Array<{ id: number; username: string }>;
+    .filter(Boolean) as Array<{ id: number; username: string; banned: boolean; allow_direct: boolean; allow_group_invite: boolean }>;
 
   if (memberUsers.length !== uniqueMembers.length) {
     return reply.status(404).send({ error: "one or more users not found" });
+  }
+
+  const blockedMember = memberUsers.find((member) => member.banned);
+  if (blockedMember) {
+    return reply.status(403).send({ error: "member banned" });
+  }
+
+  if (type === "direct" && memberUsers.some((member) => !member.allow_direct)) {
+    return reply.status(403).send({ error: "member disabled direct chats" });
+  }
+
+  if (
+    type !== "direct" &&
+    memberUsers.some((member) => !member.allow_group_invite)
+  ) {
+    return reply.status(403).send({ error: "member disabled group invites" });
   }
 
   const totalMembers = memberUsers.length + 1;
@@ -574,6 +667,11 @@ server.get("/api/admin/users", async (request, reply) => {
       banned: user.banned,
       canSend: user.can_send,
       canCreate: user.can_create,
+      allowDirect: user.allow_direct,
+      allowGroupInvite: user.allow_group_invite,
+      avatar: user.avatar,
+      bio: user.bio,
+      profilePublic: user.profile_public,
       profile
     };
   });
@@ -593,12 +691,16 @@ server.post("/api/admin/users/:id/flags", async (request, reply) => {
     banned?: boolean;
     canSend?: boolean;
     canCreate?: boolean;
+    allowDirect?: boolean;
+    allowGroupInvite?: boolean;
   };
 
   const user = updateUserFlags(userId, {
     banned: body.banned,
     can_send: body.canSend,
-    can_create: body.canCreate
+    can_create: body.canCreate,
+    allow_direct: body.allowDirect,
+    allow_group_invite: body.allowGroupInvite
   });
 
   if (!user) {
