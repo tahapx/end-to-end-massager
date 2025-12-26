@@ -107,7 +107,12 @@ export async function fetchMembers(conversationId: number) {
 
 export async function sendMessage(
   conversationId: number,
-  payloads: Array<{ toUsername: string; ciphertext: string; nonce: string }>
+  payloads: Array<{
+    messageId: string;
+    toUsername: string;
+    ciphertext: string;
+    nonce: string;
+  }>
 ) {
   const response = await fetch(`${API_BASE}/api/messages/send`, {
     method: "POST",
@@ -134,6 +139,95 @@ export async function pollMessages(since: number) {
 
   if (!response.ok) {
     throw new Error((await response.json()).error || "Poll failed");
+  }
+
+  return response.json();
+}
+
+export async function pollSentStatuses(since: number) {
+  const response = await fetch(
+    `${API_BASE}/api/messages/sent?since=${since}`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Status poll failed");
+  }
+
+  return response.json();
+}
+
+export async function markRead(conversationId: number) {
+  const response = await fetch(`${API_BASE}/api/messages/read`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ conversationId })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Read update failed");
+  }
+
+  return response.json();
+}
+
+export async function deleteMessage(payload: {
+  scope: "self" | "all";
+  messageId?: number;
+  groupId?: string;
+}) {
+  const response = await fetch(`${API_BASE}/api/messages/delete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Delete failed");
+  }
+
+  return response.json();
+}
+
+export async function setTyping(conversationId: number, isTyping: boolean) {
+  const response = await fetch(`${API_BASE}/api/typing`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ conversationId, isTyping })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Typing update failed");
+  }
+
+  return response.json();
+}
+
+export async function fetchTyping(conversationId: number) {
+  const response = await fetch(
+    `${API_BASE}/api/typing?conversationId=${conversationId}`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Typing load failed");
   }
 
   return response.json();

@@ -35,6 +35,7 @@ export type MembershipRow = {
 
 export type MessageRow = {
   id: number;
+  group_id: string;
   conversation_id: number;
   sender_id: number;
   recipient_id: number;
@@ -42,6 +43,9 @@ export type MessageRow = {
   nonce: string;
   created_at: number;
   delivered_at: number | null;
+  read_at: number | null;
+  deleted_at: number | null;
+  deleted_by: number | null;
 };
 
 type DbShape = {
@@ -192,6 +196,7 @@ export function isMember(conversationId: number, userId: number): boolean {
 }
 
 export function createMessage(
+  groupId: string,
   conversationId: number,
   senderId: number,
   recipientId: number,
@@ -202,13 +207,17 @@ export function createMessage(
   const createdAt = Date.now();
   const message: MessageRow = {
     id: db.nextIds.messages,
+    group_id: groupId,
     conversation_id: conversationId,
     sender_id: senderId,
     recipient_id: recipientId,
     ciphertext,
     nonce,
     created_at: createdAt,
-    delivered_at: null
+    delivered_at: null,
+    read_at: null,
+    deleted_at: null,
+    deleted_by: null
   };
   db.nextIds.messages += 1;
   db.messages.push(message);
@@ -220,12 +229,17 @@ export function pollMessages(
   since: number
 ): Array<{
   id: number;
+  group_id: string;
   conversation_id: number;
   sender_username: string;
   sender_public_key: string;
   ciphertext: string;
   nonce: string;
   created_at: number;
+  delivered_at: number | null;
+  read_at: number | null;
+  deleted_at: number | null;
+  deleted_by: number | null;
 }> {
   const db = loadDb();
   const usersById = new Map(db.users.map((user) => [user.id, user]));
@@ -240,12 +254,17 @@ export function pollMessages(
       const sender = usersById.get(message.sender_id);
       return {
         id: message.id,
+        group_id: message.group_id,
         conversation_id: message.conversation_id,
         sender_username: sender?.username ?? "unknown",
         sender_public_key: sender?.public_key ?? "",
         ciphertext: message.ciphertext,
         nonce: message.nonce,
-        created_at: message.created_at
+        created_at: message.created_at,
+        delivered_at: message.delivered_at,
+        read_at: message.read_at,
+        deleted_at: message.deleted_at,
+        deleted_by: message.deleted_by
       };
     });
 }
@@ -257,9 +276,144 @@ export function markDelivered(messageIds: number[]): void {
   const db = loadDb();
   const deliveredAt = Date.now();
   for (const message of db.messages) {
-    if (messageIds.includes(message.id)) {
+    if (messageIds.includes(message.id) && !message.delivered_at) {
       message.delivered_at = deliveredAt;
     }
   }
+  saveDb(db);
+}
+
+export function markRead(conversationId: number, recipientId: number): void {
+  const db = loadDb();
+  const readAt = Date.now();
+  let updated = false;
+  for (const message of db.messages) {
+    if (
+      message.conversation_id === conversationId &&
+      message.recipient_id === recipientId &&
+      !message.read_at
+    ) {
+      message.read_at = readAt;
+      updated = true;
+    }
+  }
+  if (updated) {
+    saveDb(db);
+  }
+}
+
+export function listSentStatuses(
+  senderId: number,
+  since: number
+): Array<{
+  group_id: string;
+  conversation_id: number;
+  updated_at: number;
+  delivered_at: number | null;
+  read_at: number | null;
+  deleted_at: number | null;
+}> {
+  const db = loadDb();
+  const messages = db.messages.filter((message) => {
+    if (message.sender_id !== senderId) {
+      return false;
+    }
+    const updatedAt = Math.max(
+      message.created_at,
+      message.delivered_at ?? 0,
+      message.read_at ?? 0,
+      message.deleted_at ?? 0
+    );
+    return updatedAt > since;
+  });
+  const grouped = new Map<string, MessageRow[]>();
+
+  for (const message of messages) {
+    if (!grouped.has(message.group_id)) {
+      grouped.set(message.group_id, []);
+    }
+    grouped.get(message.group_id)!.push(message);
+  }
+
+  const result: Array<{
+    group_id: string;
+    conversation_id: number;
+    updated_at: number;
+    delivered_at: number | null;
+    read_at: number | null;
+    deleted_at: number | null;
+  }> = [];
+
+  for (const [groupId, items] of grouped) {
+    const deliveredAt = items
+      .map((item) => item.delivered_at)
+      .filter((value): value is number => value !== null)
+      .sort((a, b) => b - a)[0] ?? null;
+    const readAt = items
+      .map((item) => item.read_at)
+      .filter((value): value is number => value !== null)
+      .sort((a, b) => b - a)[0] ?? null;
+    const deletedAt = items
+      .map((item) => item.deleted_at)
+      .filter((value): value is number => value !== null)
+      .sort((a, b) => b - a)[0] ?? null;
+
+    const updatedAt = Math.max(
+      items[0].created_at,
+      deliveredAt ?? 0,
+      readAt ?? 0,
+      deletedAt ?? 0
+    );
+
+    result.push({
+      group_id: groupId,
+      conversation_id: items[0].conversation_id,
+      updated_at: updatedAt,
+      delivered_at: deliveredAt,
+      read_at: readAt,
+      deleted_at: deletedAt
+    });
+  }
+
+  return result;
+}
+
+export function deleteMessageForAll(
+  groupId: string,
+  requesterId: number
+): boolean {
+  const db = loadDb();
+  const deletedAt = Date.now();
+  let updated = false;
+
+  for (const message of db.messages) {
+    if (message.group_id === groupId && message.sender_id === requesterId) {
+      message.deleted_at = deletedAt;
+      message.deleted_by = requesterId;
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    saveDb(db);
+  }
+  return updated;
+}
+
+export function deleteMessageForSelf(
+  messageId: number,
+  userId: number
+): void {
+  const db = loadDb();
+  const deletedAt = Date.now();
+  const message = db.messages.find((item) => item.id === messageId);
+  if (!message) {
+    return;
+  }
+  if (message.recipient_id !== userId) {
+    return;
+  }
+  message.deleted_at = deletedAt;
+  message.deleted_by = userId;
   saveDb(db);
 }

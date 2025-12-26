@@ -6,15 +6,19 @@ import {
   createMessage,
   createSession,
   createUser,
+  deleteMessageForAll,
+  deleteMessageForSelf,
   getConversationById,
   isMember,
   listConversationsForUser,
   listMembers,
+  listSentStatuses,
   findSession,
   findUserById,
   findUserByUsername,
-  pollMessages,
   markDelivered,
+  markRead,
+  pollMessages,
   type ConversationType
 } from "./db.js";
 
@@ -24,6 +28,13 @@ await server.register(cors, {
   origin: true,
   methods: ["GET", "POST"]
 });
+
+const typingState = new Map<
+  number,
+  Map<number, { username: string; lastTypedAt: number }>
+>();
+
+const TYPING_TTL_MS = 6000;
 
 function generateToken(): string {
   return crypto.randomBytes(24).toString("hex");
@@ -230,7 +241,12 @@ server.post("/api/messages/send", async (request, reply) => {
 
   const body = request.body as {
     conversationId?: number;
-    payloads?: Array<{ toUsername?: string; ciphertext?: string; nonce?: string }>;
+    payloads?: Array<{
+      messageId?: string;
+      toUsername?: string;
+      ciphertext?: string;
+      nonce?: string;
+    }>;
   };
 
   const conversationId = body.conversationId;
@@ -259,14 +275,15 @@ server.post("/api/messages/send", async (request, reply) => {
   const memberUsernames = new Set(members.map((member) => member.username));
 
   for (const payload of payloads) {
+    const messageId = payload.messageId?.trim();
     const toUsername = payload.toUsername?.trim();
     const ciphertext = payload.ciphertext?.trim();
     const nonce = payload.nonce?.trim();
 
-    if (!toUsername || !ciphertext || !nonce) {
+    if (!messageId || !toUsername || !ciphertext || !nonce) {
       return reply
         .status(400)
-        .send({ error: "toUsername, ciphertext, nonce required" });
+        .send({ error: "messageId, toUsername, ciphertext, nonce required" });
     }
 
     if (!memberUsernames.has(toUsername)) {
@@ -278,7 +295,7 @@ server.post("/api/messages/send", async (request, reply) => {
       return reply.status(404).send({ error: "recipient not found" });
     }
 
-    createMessage(conversationId, userId, recipient.id, ciphertext, nonce);
+    createMessage(messageId, conversationId, userId, recipient.id, ciphertext, nonce);
   }
 
   return { ok: true };
@@ -297,6 +314,136 @@ server.get("/api/messages/poll", async (request, reply) => {
   markDelivered(messages.map((msg) => msg.id));
 
   return { messages };
+});
+
+server.get("/api/messages/sent", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+
+  const sinceRaw = (request.query as { since?: string }).since;
+  const since = sinceRaw ? Number(sinceRaw) : 0;
+
+  const statuses = listSentStatuses(userId, Number.isFinite(since) ? since : 0);
+  return { statuses };
+});
+
+server.post("/api/messages/read", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+
+  const body = request.body as { conversationId?: number };
+  if (!body.conversationId) {
+    return reply.status(400).send({ error: "conversationId required" });
+  }
+
+  if (!isMember(body.conversationId, userId)) {
+    return reply.status(403).send({ error: "forbidden" });
+  }
+
+  markRead(body.conversationId, userId);
+  return { ok: true };
+});
+
+server.post("/api/messages/delete", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+
+  const body = request.body as {
+    scope?: "self" | "all";
+    groupId?: string;
+    messageId?: number;
+  };
+
+  if (body.scope === "all") {
+    if (!body.groupId) {
+      return reply.status(400).send({ error: "groupId required" });
+    }
+    const updated = deleteMessageForAll(body.groupId, userId);
+    if (!updated) {
+      return reply.status(403).send({ error: "cannot delete this message" });
+    }
+    return { ok: true };
+  }
+
+  if (body.scope === "self") {
+    if (!body.messageId) {
+      return reply.status(400).send({ error: "messageId required" });
+    }
+    deleteMessageForSelf(body.messageId, userId);
+    return { ok: true };
+  }
+
+  return reply.status(400).send({ error: "invalid scope" });
+});
+
+server.post("/api/typing", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+
+  const body = request.body as { conversationId?: number; isTyping?: boolean };
+  if (!body.conversationId) {
+    return reply.status(400).send({ error: "conversationId required" });
+  }
+
+  if (!isMember(body.conversationId, userId)) {
+    return reply.status(403).send({ error: "forbidden" });
+  }
+
+  if (!typingState.has(body.conversationId)) {
+    typingState.set(body.conversationId, new Map());
+  }
+
+  const conversationTyping = typingState.get(body.conversationId)!;
+  if (!body.isTyping) {
+    conversationTyping.delete(userId);
+    return { ok: true };
+  }
+
+  const user = findUserById(userId);
+  conversationTyping.set(userId, {
+    username: user?.username ?? "unknown",
+    lastTypedAt: Date.now()
+  });
+
+  return { ok: true };
+});
+
+server.get("/api/typing", async (request, reply) => {
+  const userId = getAuthUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+
+  const conversationId = Number(
+    (request.query as { conversationId?: string }).conversationId
+  );
+  if (!conversationId) {
+    return reply.status(400).send({ error: "conversationId required" });
+  }
+
+  if (!isMember(conversationId, userId)) {
+    return reply.status(403).send({ error: "forbidden" });
+  }
+
+  const now = Date.now();
+  const conversationTyping = typingState.get(conversationId);
+  if (!conversationTyping) {
+    return { users: [] };
+  }
+
+  const users = Array.from(conversationTyping.entries())
+    .filter(([id, entry]) => id !== userId && now - entry.lastTypedAt < TYPING_TTL_MS)
+    .map(([, entry]) => entry.username);
+
+  return { users };
 });
 
 const port = Number(process.env.PORT || 3001);

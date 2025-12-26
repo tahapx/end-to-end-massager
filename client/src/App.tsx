@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent
+} from "react";
 import {
   decryptMessage,
   deriveSharedKey,
@@ -10,19 +17,26 @@ import {
 import {
   createConversation,
   fetchMembers,
+  fetchTyping,
   listConversations,
   login,
+  markRead,
   pollMessages,
+  pollSentStatuses,
   sendMessage,
   setAuthToken,
-  signup
+  setTyping,
+  signup,
+  deleteMessage
 } from "./api";
 
 const STORAGE_KEYS = {
   username: "messager.username",
   publicKey: "messager.publicKey",
   privateKey: "messager.privateKey",
-  token: "messager.token"
+  token: "messager.token",
+  pinnedPrefix: "messager.pinned.",
+  starredPrefix: "messager.starred."
 };
 
 const MAX_ATTACHMENT_SIZE = 2 * 1024 * 1024;
@@ -40,10 +54,12 @@ type MessagePayload = {
 
 type ChatMessage = {
   id: number | string;
+  groupId: string;
   conversationId: number;
   sender: string;
   payload: MessagePayload;
   createdAt: number;
+  deletedAt: number | null;
 };
 
 type Conversation = {
@@ -52,6 +68,12 @@ type Conversation = {
   name: string | null;
   ownerId: number;
   members: Array<{ username: string; publicKey: string }>;
+};
+
+type StatusRow = {
+  deliveredAt: number | null;
+  readAt: number | null;
+  deletedAt: number | null;
 };
 
 const tabs: Array<Conversation["type"]> = ["group", "channel", "direct"];
@@ -67,7 +89,7 @@ function getConversationTitle(conversation: Conversation, self: string): string 
 function getPreview(payload: MessagePayload): string {
   const trimmed = payload.text.trim();
   if (trimmed) {
-    return trimmed.length > 40 ? `${trimmed.slice(0, 40)}…` : trimmed;
+    return trimmed.length > 40 ? `${trimmed.slice(0, 40)}...` : trimmed;
   }
   if (payload.attachments.length === 0) {
     return "";
@@ -90,6 +112,10 @@ function parsePayload(text: string): MessagePayload {
     // fall back to plain text
   }
   return { text, attachments: [] };
+}
+
+function matchesQuery(value: string, query: string): boolean {
+  return value.toLowerCase().includes(query.toLowerCase());
 }
 
 export default function App() {
@@ -115,23 +141,51 @@ export default function App() {
   const [messageText, setMessageText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [status, setStatus] = useState<string | null>(null);
+  const [directUsername, setDirectUsername] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [groupMembers, setGroupMembers] = useState("");
+  const [conversationQuery, setConversationQuery] = useState("");
+  const [messageQuery, setMessageQuery] = useState("");
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [audioDurations, setAudioDurations] = useState<Record<string, number>>(
+    {}
+  );
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
+  const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
   const [unreadByConversation, setUnreadByConversation] = useState<
     Record<number, number>
   >({});
   const [lastMessageByConversation, setLastMessageByConversation] = useState<
     Record<number, { sender: string; payload: MessagePayload; createdAt: number }>
   >({});
-  const [status, setStatus] = useState<string | null>(null);
-  const [directUsername, setDirectUsername] = useState("");
-  const [groupName, setGroupName] = useState("");
-  const [groupMembers, setGroupMembers] = useState("");
+  const [statusByGroupId, setStatusByGroupId] = useState<
+    Record<string, StatusRow>
+  >({});
 
   const lastPollRef = useRef(0);
+  const lastStatusPollRef = useRef(0);
   const selectedConversationRef = useRef<number | null>(null);
+  const typingTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     setAuthToken(token || null);
   }, [token]);
+
+  useEffect(() => {
+    if (!sessionUsername) {
+      return;
+    }
+    const pinnedRaw = localStorage.getItem(
+      `${STORAGE_KEYS.pinnedPrefix}${sessionUsername}`
+    );
+    const starredRaw = localStorage.getItem(
+      `${STORAGE_KEYS.starredPrefix}${sessionUsername}`
+    );
+    setPinnedIds(new Set(pinnedRaw ? JSON.parse(pinnedRaw) : []));
+    setStarredIds(new Set(starredRaw ? JSON.parse(starredRaw) : []));
+  }, [sessionUsername]);
 
   useEffect(() => {
     selectedConversationRef.current = selectedConversationId;
@@ -140,6 +194,7 @@ export default function App() {
         ...prev,
         [selectedConversationId]: 0
       }));
+      markRead(selectedConversationId).catch(() => undefined);
     }
   }, [selectedConversationId]);
 
@@ -188,6 +243,19 @@ export default function App() {
         const decrypted: ChatMessage[] = [];
 
         for (const msg of data.messages) {
+          if (msg.deleted_at) {
+            decrypted.push({
+              id: msg.id,
+              groupId: msg.group_id,
+              conversationId: msg.conversation_id,
+              sender: msg.sender_username,
+              payload: { text: "[Deleted]", attachments: [] },
+              createdAt: msg.created_at,
+              deletedAt: msg.deleted_at
+            });
+            continue;
+          }
+
           try {
             const senderKey = await importPublicKey(msg.sender_public_key);
             const sharedKey = await deriveSharedKey(privKey, senderKey);
@@ -198,18 +266,22 @@ export default function App() {
             );
             decrypted.push({
               id: msg.id,
+              groupId: msg.group_id,
               conversationId: msg.conversation_id,
               sender: msg.sender_username,
               payload: parsePayload(text),
-              createdAt: msg.created_at
+              createdAt: msg.created_at,
+              deletedAt: msg.deleted_at
             });
           } catch {
             decrypted.push({
               id: msg.id,
+              groupId: msg.group_id,
               conversationId: msg.conversation_id,
               sender: msg.sender_username,
               payload: { text: "[Failed to decrypt]", attachments: [] },
-              createdAt: msg.created_at
+              createdAt: msg.created_at,
+              deletedAt: msg.deleted_at
             });
           }
         }
@@ -235,6 +307,14 @@ export default function App() {
           }
           return next;
         });
+        if (
+          selectedConversationRef.current &&
+          decrypted.some(
+            (msg) => msg.conversationId === selectedConversationRef.current
+          )
+        ) {
+          markRead(selectedConversationRef.current).catch(() => undefined);
+        }
         lastPollRef.current = data.messages[data.messages.length - 1].created_at;
       } catch (error) {
         setStatus((error as Error).message);
@@ -250,6 +330,74 @@ export default function App() {
     };
   }, [privateKeyPromise, token]);
 
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    let isMounted = true;
+    const poller = async () => {
+      try {
+        const data = await pollSentStatuses(lastStatusPollRef.current);
+        if (!isMounted || !data.statuses?.length) {
+          return;
+        }
+
+        setStatusByGroupId((prev) => {
+          const next = { ...prev };
+          for (const row of data.statuses) {
+            next[row.group_id] = {
+              deliveredAt: row.delivered_at ?? null,
+              readAt: row.read_at ?? null,
+              deletedAt: row.deleted_at ?? null
+            };
+          }
+          return next;
+        });
+
+        lastStatusPollRef.current =
+          data.statuses[data.statuses.length - 1].updated_at;
+      } catch (error) {
+        setStatus((error as Error).message);
+      }
+    };
+
+    const interval = setInterval(poller, 4000);
+    poller();
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!selectedConversationId || !token) {
+      setTypingUsers([]);
+      return undefined;
+    }
+
+    let isMounted = true;
+    const poller = async () => {
+      try {
+        const data = await fetchTyping(selectedConversationId);
+        if (!isMounted) {
+          return;
+        }
+        setTypingUsers(data.users || []);
+      } catch {
+        // ignore
+      }
+    };
+
+    const interval = setInterval(poller, 2000);
+    poller();
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [selectedConversationId, token]);
   const handleSignup = async () => {
     setStatus(null);
     try {
@@ -319,10 +467,14 @@ export default function App() {
 
       const senderKey = await privateKeyPromise;
       const payloads: Array<{
+        messageId: string;
         toUsername: string;
         ciphertext: string;
         nonce: string;
       }> = [];
+      const messageId = crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
 
       for (const member of members) {
         if (member.username === sessionUsername) {
@@ -335,6 +487,7 @@ export default function App() {
           JSON.stringify(payload)
         );
         payloads.push({
+          messageId,
           toUsername: member.username,
           ciphertext: encrypted.ciphertext,
           nonce: encrypted.nonce
@@ -352,10 +505,12 @@ export default function App() {
         ...prev,
         {
           id: `local-${Date.now()}`,
+          groupId: messageId,
           conversationId: conversation.id,
           sender: sessionUsername,
           payload,
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          deletedAt: null
         }
       ]);
       setLastMessageByConversation((prev) => ({
@@ -366,8 +521,17 @@ export default function App() {
           createdAt: Date.now()
         }
       }));
+      setStatusByGroupId((prev) => ({
+        ...prev,
+        [messageId]: {
+          deliveredAt: null,
+          readAt: null,
+          deletedAt: null
+        }
+      }));
       setMessageText("");
       setAttachments([]);
+      setTyping(conversation.id, false).catch(() => undefined);
     } catch (error) {
       setStatus((error as Error).message);
     }
@@ -438,17 +602,130 @@ export default function App() {
     event.target.value = "";
   };
 
-  const filteredConversations = conversations.filter(
-    (conv) => conv.type === tab
+  const handleTyping = () => {
+    if (!selectedConversationId) {
+      return;
+    }
+    setTyping(selectedConversationId, true).catch(() => undefined);
+    if (typingTimeoutRef.current) {
+      window.clearTimeout(typingTimeoutRef.current);
+    }
+    typingTimeoutRef.current = window.setTimeout(() => {
+      setTyping(selectedConversationId, false).catch(() => undefined);
+    }, 2000);
+  };
+
+  const handleTogglePinned = (messageId: string) => {
+    setPinnedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      localStorage.setItem(
+        `${STORAGE_KEYS.pinnedPrefix}${sessionUsername}`,
+        JSON.stringify(Array.from(next))
+      );
+      return next;
+    });
+  };
+
+  const handleToggleStarred = (messageId: string) => {
+    setStarredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      localStorage.setItem(
+        `${STORAGE_KEYS.starredPrefix}${sessionUsername}`,
+        JSON.stringify(Array.from(next))
+      );
+      return next;
+    });
+  };
+
+  const handleDelete = async (message: ChatMessage) => {
+    try {
+      if (message.sender === sessionUsername) {
+        await deleteMessage({ scope: "all", groupId: message.groupId });
+      } else if (typeof message.id === "number") {
+        await deleteMessage({ scope: "self", messageId: message.id });
+      }
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === message.id
+            ? {
+                ...item,
+                payload: { text: "[Deleted]", attachments: [] },
+                deletedAt: Date.now()
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const filteredConversations = conversations.filter((conv) => {
+    if (!conversationQuery) {
+      return conv.type === tab;
+    }
+    if (conv.type !== tab) {
+      return false;
+    }
+    const title = getConversationTitle(conv, sessionUsername);
+    const members = conv.members.map((member) => member.username).join(", ");
+    return (
+      matchesQuery(title, conversationQuery) ||
+      matchesQuery(members, conversationQuery)
+    );
+  });
+
+  const sortedConversations = filteredConversations.sort((a, b) => {
+    const aTime = lastMessageByConversation[a.id]?.createdAt ?? 0;
+    const bTime = lastMessageByConversation[b.id]?.createdAt ?? 0;
+    return bTime - aTime;
+  });
+
+  const selectedConversation = conversations.find(
+    (item) => item.id === selectedConversationId
   );
 
   const activeMessages = messages.filter(
     (msg) => msg.conversationId === selectedConversationId
   );
 
-  const selectedConversation = conversations.find(
-    (item) => item.id === selectedConversationId
+  const searchedMessages = messageQuery
+    ? activeMessages.filter((msg) => {
+        const textMatch = matchesQuery(msg.payload.text || "", messageQuery);
+        const attachmentMatch = msg.payload.attachments.some((attachment) =>
+          matchesQuery(attachment.name, messageQuery)
+        );
+        return textMatch || attachmentMatch;
+      })
+    : activeMessages;
+
+  const pinnedMessages = activeMessages.filter((msg) =>
+    pinnedIds.has(String(msg.id))
   );
+
+  const getStatusMark = (groupId: string) => {
+    const statusRow = statusByGroupId[groupId];
+    if (!statusRow) {
+      return "";
+    }
+    if (statusRow.readAt) {
+      return "RR";
+    }
+    if (statusRow.deliveredAt) {
+      return "D";
+    }
+    return ".";
+  };
 
   return (
     <div className="app">
@@ -516,11 +793,18 @@ export default function App() {
               ))}
             </div>
 
+            <input
+              className="search"
+              value={conversationQuery}
+              onChange={(event) => setConversationQuery(event.target.value)}
+              placeholder="Search conversations"
+            />
+
             <div className="conversation-list">
-              {filteredConversations.length === 0 && (
+              {sortedConversations.length === 0 && (
                 <p className="muted">No conversations yet.</p>
               )}
-              {filteredConversations.map((conv) => (
+              {sortedConversations.map((conv) => (
                 <button
                   key={conv.id}
                   className={
@@ -532,6 +816,13 @@ export default function App() {
                 >
                   <div className="title">
                     {getConversationTitle(conv, sessionUsername)}
+                    <span className="time">
+                      {lastMessageByConversation[conv.id]
+                        ? new Date(
+                            lastMessageByConversation[conv.id].createdAt
+                          ).toLocaleTimeString()
+                        : ""}
+                    </span>
                   </div>
                   <div className="meta">
                     <span className="preview">
@@ -596,21 +887,54 @@ export default function App() {
             {selectedConversation && (
               <>
                 <div className="thread-header">
-                  <h2>{getConversationTitle(selectedConversation, sessionUsername)}</h2>
+                  <div>
+                    <h2>
+                      {getConversationTitle(selectedConversation, sessionUsername)}
+                    </h2>
+                    {typingUsers.length > 0 && (
+                      <p className="typing">
+                        {typingUsers.join(", ")} typing...
+                      </p>
+                    )}
+                  </div>
                   <span className="thread-type">
                     {selectedConversation.type}
                   </span>
                 </div>
 
+                <input
+                  className="search"
+                  value={messageQuery}
+                  onChange={(event) => setMessageQuery(event.target.value)}
+                  placeholder="Search in messages"
+                />
+
+                {pinnedMessages.length > 0 && (
+                  <div className="pinned">
+                    <h4>Pinned</h4>
+                    {pinnedMessages.map((msg) => (
+                      <div key={`pin-${msg.id}`} className="pinned-item">
+                        <span>{msg.sender}:</span>
+                        <span>{getPreview(msg.payload)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="messages">
-                  {activeMessages.length === 0 && (
+                  {searchedMessages.length === 0 && (
                     <p className="muted">No messages yet.</p>
                   )}
-                  {activeMessages.map((msg) => (
+                  {searchedMessages.map((msg) => (
                     <div key={msg.id} className="message">
                       <div className="meta">
                         <span>{msg.sender}</span>
-                        <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
+                        <span className="meta-right">
+                          <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
+                          {msg.sender === sessionUsername && (
+                            <span className="tick">{getStatusMark(msg.groupId)}</span>
+                          )}
+                        </span>
                       </div>
                       {msg.payload.text && (
                         <div className="text">{msg.payload.text}</div>
@@ -618,14 +942,66 @@ export default function App() {
                       {msg.payload.attachments.map((attachment, index) => (
                         <div key={`${msg.id}-${index}`} className="attachment">
                           {attachment.kind === "image" && (
-                            <img src={attachment.data} alt={attachment.name} />
+                            <img
+                              src={attachment.data}
+                              alt={attachment.name}
+                              onClick={() => setLightboxSrc(attachment.data)}
+                            />
                           )}
                           {attachment.kind === "audio" && (
-                            <audio controls src={attachment.data} />
+                            <audio
+                              controls
+                              src={attachment.data}
+                              onLoadedMetadata={(event) => {
+                                const key = `${msg.id}-${index}`;
+                                setAudioDurations((prev) => ({
+                                  ...prev,
+                                  [key]: event.currentTarget.duration
+                                }));
+                              }}
+                            />
                           )}
-                          <div className="file-name">{attachment.name}</div>
+                          {attachment.kind === "audio" &&
+                            audioDurations[`${msg.id}-${index}`] && (
+                              <div className="file-name">
+                                {attachment.name} - {audioDurations[
+                                  `${msg.id}-${index}`
+                                ].toFixed(1)}s
+                              </div>
+                            )}
+                          {attachment.kind === "image" && (
+                            <div className="file-name">{attachment.name}</div>
+                          )}
                         </div>
                       ))}
+                      <div className="message-actions">
+                        <button
+                          className={
+                            pinnedIds.has(String(msg.id))
+                              ? "action active"
+                              : "action"
+                          }
+                          onClick={() => handleTogglePinned(String(msg.id))}
+                        >
+                          Pin
+                        </button>
+                        <button
+                          className={
+                            starredIds.has(String(msg.id))
+                              ? "action active"
+                              : "action"
+                          }
+                          onClick={() => handleToggleStarred(String(msg.id))}
+                        >
+                          Star
+                        </button>
+                        <button
+                          className="action danger"
+                          onClick={() => handleDelete(msg)}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -633,7 +1009,10 @@ export default function App() {
                 <div className="composer">
                   <textarea
                     value={messageText}
-                    onChange={(event) => setMessageText(event.target.value)}
+                    onChange={(event) => {
+                      setMessageText(event.target.value);
+                      handleTyping();
+                    }}
                     placeholder="Type your message"
                   />
                   <div className="composer-actions">
@@ -678,6 +1057,12 @@ export default function App() {
           <p>Public key stored on server: {publicKey ? "yes" : "no"}</p>
           <p>Private key stored locally: {privateKey ? "yes" : "no"}</p>
         </section>
+      )}
+
+      {lightboxSrc && (
+        <div className="lightbox" onClick={() => setLightboxSrc(null)}>
+          <img src={lightboxSrc} alt="Preview" />
+        </div>
       )}
     </div>
   );

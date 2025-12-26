@@ -183,6 +183,18 @@ button:disabled {
   opacity: 0.7;
 }
 
+.conversation .title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation .time {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
 .preview {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -256,6 +268,17 @@ button:disabled {
   margin-bottom: 8px;
 }
 
+.meta-right {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tick {
+  font-weight: 700;
+  color: #2f312d;
+}
+
 .message .text {
   font-size: 15px;
   margin-bottom: 6px;
@@ -280,6 +303,79 @@ button:disabled {
 .composer {
   display: grid;
   gap: 12px;
+}
+
+.search {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #d2ccc2;
+  font-size: 14px;
+}
+
+.typing {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #8a6b5a;
+}
+
+.pinned {
+  background: #fff7ec;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.pinned h4 {
+  margin: 0 0 6px;
+}
+
+.pinned-item {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  color: #5b554d;
+}
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.message-actions .action {
+  border: none;
+  background: #efe8dd;
+  color: #443f37;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.message-actions .action.active {
+  background: #2f312d;
+  color: #fff;
+}
+
+.message-actions .action.danger {
+  background: #f2d6cf;
+  color: #8c2f20;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: grid;
+  place-items: center;
+  z-index: 20;
+  padding: 20px;
+}
+
+.lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 14px;
 }
 
 .composer-actions {
