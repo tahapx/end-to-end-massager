@@ -15,6 +15,8 @@ License: MIT (change if needed)
 - No native dependencies in the backend
 - Personal chats, groups, and channels (max 5 members)
 - Encrypted image/audio attachments (base64)
+- Admin panel for moderation (ban, limits, delete users/channels)
+- User profile logging (IP + device info per username file)
 
 ## Tech stack
 
@@ -78,6 +80,15 @@ npm run dev
 ```
 
 Open `http://localhost:5173`.
+
+## Admin panel
+
+Default admin credentials:
+
+- Username: `myadmin`
+- Password: `000123`
+
+Change the admin password after first login in the admin panel.
 
 ## Local testing tip
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const DB_PATH = path.join(process.cwd(), "data.json");
 
@@ -10,6 +11,9 @@ export type UserRow = {
   password_salt: string;
   public_key: string;
   created_at: number;
+  banned: boolean;
+  can_send: boolean;
+  can_create: boolean;
 };
 
 export type SessionRow = {
@@ -48,12 +52,27 @@ export type MessageRow = {
   deleted_by: number | null;
 };
 
+type AdminCredentials = {
+  username: string;
+  password_hash: string;
+  password_salt: string;
+  created_at: number;
+  updated_at: number;
+};
+
+type AdminSession = {
+  token: string;
+  created_at: number;
+};
+
 type DbShape = {
   users: UserRow[];
   sessions: SessionRow[];
   conversations: ConversationRow[];
   memberships: MembershipRow[];
   messages: MessageRow[];
+  admin_credentials: AdminCredentials | null;
+  admin_sessions: AdminSession[];
   nextIds: {
     users: number;
     conversations: number;
@@ -67,8 +86,13 @@ const defaultDb: DbShape = {
   conversations: [],
   memberships: [],
   messages: [],
+  admin_credentials: null,
+  admin_sessions: [],
   nextIds: { users: 1, conversations: 1, messages: 1 }
 };
+
+const DEFAULT_ADMIN_USERNAME = "myadmin";
+const DEFAULT_ADMIN_PASSWORD = "000123";
 
 function loadDb(): DbShape {
   if (!fs.existsSync(DB_PATH)) {
@@ -91,6 +115,59 @@ function saveDb(db: DbShape): void {
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
 }
 
+function hashPassword(password: string, salt: string): string {
+  return crypto.scryptSync(password, salt, 32).toString("hex");
+}
+
+function ensureAdminCredentials(db: DbShape): void {
+  if (db.admin_credentials) {
+    return;
+  }
+  const salt = crypto.randomBytes(16).toString("hex");
+  const passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD, salt);
+  const now = Date.now();
+  db.admin_credentials = {
+    username: DEFAULT_ADMIN_USERNAME,
+    password_hash: passwordHash,
+    password_salt: salt,
+    created_at: now,
+    updated_at: now
+  };
+}
+
+export function getAdminCredentials(): AdminCredentials {
+  const db = loadDb();
+  ensureAdminCredentials(db);
+  saveDb(db);
+  return db.admin_credentials!;
+}
+
+export function updateAdminPassword(newPassword: string): void {
+  const db = loadDb();
+  ensureAdminCredentials(db);
+  const salt = crypto.randomBytes(16).toString("hex");
+  const passwordHash = hashPassword(newPassword, salt);
+  db.admin_credentials = {
+    username: db.admin_credentials!.username,
+    password_hash: passwordHash,
+    password_salt: salt,
+    created_at: db.admin_credentials!.created_at,
+    updated_at: Date.now()
+  };
+  saveDb(db);
+}
+
+export function createAdminSession(token: string): void {
+  const db = loadDb();
+  db.admin_sessions.push({ token, created_at: Date.now() });
+  saveDb(db);
+}
+
+export function findAdminSession(token: string): boolean {
+  const db = loadDb();
+  return db.admin_sessions.some((session) => session.token === token);
+}
+
 export function createUser(
   username: string,
   passwordHash: string,
@@ -105,7 +182,10 @@ export function createUser(
     password_hash: passwordHash,
     password_salt: passwordSalt,
     public_key: publicKey,
-    created_at: createdAt
+    created_at: createdAt,
+    banned: false,
+    can_send: true,
+    can_create: true
   };
   db.nextIds.users += 1;
   db.users.push(user);
@@ -121,6 +201,92 @@ export function findUserByUsername(username: string): UserRow | null {
 export function findUserById(id: number): UserRow | null {
   const db = loadDb();
   return db.users.find((user) => user.id === id) ?? null;
+}
+
+export function listUsers(): UserRow[] {
+  const db = loadDb();
+  return db.users;
+}
+
+export function updateUserFlags(
+  userId: number,
+  updates: Partial<Pick<UserRow, "banned" | "can_send" | "can_create">>
+): UserRow | null {
+  const db = loadDb();
+  const user = db.users.find((item) => item.id === userId);
+  if (!user) {
+    return null;
+  }
+  if (typeof updates.banned === "boolean") {
+    user.banned = updates.banned;
+  }
+  if (typeof updates.can_send === "boolean") {
+    user.can_send = updates.can_send;
+  }
+  if (typeof updates.can_create === "boolean") {
+    user.can_create = updates.can_create;
+  }
+  saveDb(db);
+  return user;
+}
+
+export function updateUserPassword(
+  userId: number,
+  passwordHash: string,
+  passwordSalt: string
+): boolean {
+  const db = loadDb();
+  const user = db.users.find((item) => item.id === userId);
+  if (!user) {
+    return false;
+  }
+  user.password_hash = passwordHash;
+  user.password_salt = passwordSalt;
+  saveDb(db);
+  return true;
+}
+
+export function deleteUserAndData(userId: number): boolean {
+  const db = loadDb();
+  const user = db.users.find((item) => item.id === userId);
+  if (!user) {
+    return false;
+  }
+  db.users = db.users.filter((item) => item.id !== userId);
+  db.sessions = db.sessions.filter((session) => session.user_id !== userId);
+  db.memberships = db.memberships.filter(
+    (member) => member.user_id !== userId
+  );
+  db.messages = db.messages.filter(
+    (message) =>
+      message.sender_id !== userId && message.recipient_id !== userId
+  );
+
+  const memberCounts = new Map<number, number>();
+  for (const member of db.memberships) {
+    memberCounts.set(
+      member.conversation_id,
+      (memberCounts.get(member.conversation_id) || 0) + 1
+    );
+  }
+  const activeConversationIds = new Set<number>();
+  for (const [conversationId, count] of memberCounts) {
+    if (count > 0) {
+      activeConversationIds.add(conversationId);
+    }
+  }
+  db.conversations = db.conversations.filter((conv) => {
+    if (!activeConversationIds.has(conv.id)) {
+      return false;
+    }
+    return true;
+  });
+  db.messages = db.messages.filter((message) =>
+    activeConversationIds.has(message.conversation_id)
+  );
+
+  saveDb(db);
+  return true;
 }
 
 export function createSession(token: string, userId: number): void {
@@ -172,6 +338,28 @@ export function listConversationsForUser(userId: number): ConversationRow[] {
   );
 
   return db.conversations.filter((conv) => conversationIds.has(conv.id));
+}
+
+export function listConversations(): ConversationRow[] {
+  const db = loadDb();
+  return db.conversations;
+}
+
+export function deleteConversation(conversationId: number): boolean {
+  const db = loadDb();
+  const exists = db.conversations.some((conv) => conv.id === conversationId);
+  if (!exists) {
+    return false;
+  }
+  db.conversations = db.conversations.filter((conv) => conv.id !== conversationId);
+  db.memberships = db.memberships.filter(
+    (member) => member.conversation_id !== conversationId
+  );
+  db.messages = db.messages.filter(
+    (message) => message.conversation_id !== conversationId
+  );
+  saveDb(db);
+  return true;
 }
 
 export function getConversationById(id: number): ConversationRow | null {

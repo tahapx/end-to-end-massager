@@ -15,7 +15,16 @@ import {
   importPublicKey
 } from "./crypto";
 import {
+  adminDeleteConversation,
+  adminDeleteUser,
+  adminListConversations,
+  adminListUsers,
+  adminLogin,
+  adminResetUserPassword,
+  adminUpdatePassword,
+  adminUpdateUserFlags,
   createConversation,
+  deleteMessage,
   fetchMembers,
   fetchTyping,
   listConversations,
@@ -24,10 +33,10 @@ import {
   pollMessages,
   pollSentStatuses,
   sendMessage,
+  setAdminToken,
   setAuthToken,
   setTyping,
-  signup,
-  deleteMessage
+  signup
 } from "./api";
 
 const STORAGE_KEYS = {
@@ -76,6 +85,38 @@ type StatusRow = {
   deletedAt: number | null;
 };
 
+type UserFlags = {
+  banned: boolean;
+  canSend: boolean;
+  canCreate: boolean;
+};
+
+type AdminUser = {
+  id: number;
+  username: string;
+  createdAt: number;
+  banned: boolean;
+  canSend: boolean;
+  canCreate: boolean;
+  profile: {
+    last_ip: string;
+    last_user_agent: string;
+    last_platform: string;
+    last_language: string;
+    last_device_model: string;
+    last_seen_at: number;
+  } | null;
+};
+
+type AdminConversation = {
+  id: number;
+  type: string;
+  name: string | null;
+  ownerId: number;
+  createdAt: number;
+  members: string[];
+};
+
 const tabs: Array<Conversation["type"]> = ["group", "channel", "direct"];
 
 function getConversationTitle(conversation: Conversation, self: string): string {
@@ -118,6 +159,19 @@ function matchesQuery(value: string, query: string): boolean {
   return value.toLowerCase().includes(query.toLowerCase());
 }
 
+function getDeviceInfo() {
+  const anyNavigator = navigator as typeof navigator & {
+    userAgentData?: { platform?: string; model?: string };
+  };
+
+  return {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    deviceModel: anyNavigator.userAgentData?.model || ""
+  };
+}
+
 export default function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -133,6 +187,21 @@ export default function App() {
   const [privateKey, setPrivateKey] = useState(
     localStorage.getItem(STORAGE_KEYS.privateKey) || ""
   );
+  const [userFlags, setUserFlags] = useState<UserFlags>({
+    banned: false,
+    canSend: true,
+    canCreate: true
+  });
+  const [authMode, setAuthMode] = useState<"user" | "admin">("user");
+  const [adminUsername, setAdminUsername] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminTokenState, setAdminTokenState] = useState<string | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminConversations, setAdminConversations] = useState<
+    AdminConversation[]
+  >([]);
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+
   const [tab, setTab] = useState<Conversation["type"]>("group");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<
@@ -174,6 +243,10 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    setAdminToken(adminTokenState || null);
+  }, [adminTokenState]);
+
+  useEffect(() => {
     if (!sessionUsername) {
       return;
     }
@@ -206,6 +279,7 @@ export default function App() {
   }, [privateKey]);
 
   const isLoggedIn = Boolean(token && sessionUsername);
+  const isAdmin = Boolean(adminTokenState);
 
   const refreshConversations = async () => {
     try {
@@ -219,6 +293,19 @@ export default function App() {
     }
   };
 
+  const refreshAdminData = async () => {
+    try {
+      const [usersData, conversationsData] = await Promise.all([
+        adminListUsers(),
+        adminListConversations()
+      ]);
+      setAdminUsers(usersData.users || []);
+      setAdminConversations(conversationsData.conversations || []);
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
   useEffect(() => {
     if (!isLoggedIn) {
       return;
@@ -226,6 +313,12 @@ export default function App() {
     refreshConversations();
   }, [isLoggedIn]);
 
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+    refreshAdminData();
+  }, [isAdmin]);
   useEffect(() => {
     if (!token || !privateKeyPromise) {
       return undefined;
@@ -402,12 +495,17 @@ export default function App() {
     setStatus(null);
     try {
       const keys = await generateKeyPair();
-      const data = await signup(username, password, keys.publicKey);
+      const data = await signup(username, password, keys.publicKey, getDeviceInfo());
 
       setSessionUsername(data.username);
       setToken(data.token);
       setPublicKey(keys.publicKey);
       setPrivateKey(keys.privateKey);
+      setUserFlags({
+        banned: data.banned,
+        canSend: data.canSend,
+        canCreate: data.canCreate
+      });
 
       localStorage.setItem(STORAGE_KEYS.username, data.username);
       localStorage.setItem(STORAGE_KEYS.token, data.token);
@@ -428,13 +526,112 @@ export default function App() {
         return;
       }
 
-      const data = await login(username, password);
+      const data = await login(username, password, getDeviceInfo());
       setSessionUsername(data.username);
       setToken(data.token);
+      setUserFlags({
+        banned: data.banned,
+        canSend: data.canSend,
+        canCreate: data.canCreate
+      });
       localStorage.setItem(STORAGE_KEYS.username, data.username);
       localStorage.setItem(STORAGE_KEYS.token, data.token);
 
       setStatus("Login complete");
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const handleAdminLogin = async () => {
+    setStatus(null);
+    try {
+      const data = await adminLogin(adminUsername, adminPassword);
+      setAdminTokenState(data.token);
+      setAdminToken(data.token);
+      setAdminUsername(data.username);
+      setAdminPassword("");
+      setStatus("Admin login complete");
+      await refreshAdminData();
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setAdminTokenState(null);
+    setAdminToken(null);
+    setAdminUsers([]);
+    setAdminConversations([]);
+    setStatus("Admin logged out");
+  };
+
+  const handleAdminPasswordChange = async () => {
+    setStatus(null);
+    try {
+      await adminUpdatePassword(newAdminPassword);
+      setNewAdminPassword("");
+      setStatus("Admin password updated");
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const handleAdminToggle = async (
+    user: AdminUser,
+    key: "banned" | "canSend" | "canCreate"
+  ) => {
+    setStatus(null);
+    try {
+      const payload = {
+        banned: key === "banned" ? !user.banned : user.banned,
+        canSend: key === "canSend" ? !user.canSend : user.canSend,
+        canCreate: key === "canCreate" ? !user.canCreate : user.canCreate
+      };
+      await adminUpdateUserFlags(user.id, payload);
+      await refreshAdminData();
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const handleAdminResetPassword = async (userId: number) => {
+    const nextPassword = window.prompt("New password for user:");
+    if (!nextPassword) {
+      return;
+    }
+    setStatus(null);
+    try {
+      await adminResetUserPassword(userId, nextPassword);
+      setStatus("Password updated");
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const handleAdminDeleteUser = async (userId: number) => {
+    if (!window.confirm("Delete this user and all data?")) {
+      return;
+    }
+    setStatus(null);
+    try {
+      await adminDeleteUser(userId);
+      await refreshAdminData();
+      setStatus("User deleted");
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  };
+
+  const handleAdminDeleteConversation = async (conversationId: number) => {
+    if (!window.confirm("Delete this conversation?")) {
+      return;
+    }
+    setStatus(null);
+    try {
+      await adminDeleteConversation(conversationId);
+      await refreshAdminData();
+      setStatus("Conversation deleted");
     } catch (error) {
       setStatus((error as Error).message);
     }
@@ -449,6 +646,11 @@ export default function App() {
       (item) => item.id === selectedConversationId
     );
     if (!conversation) {
+      return;
+    }
+
+    if (userFlags.banned || !userFlags.canSend) {
+      setStatus("You are restricted from sending messages.");
       return;
     }
 
@@ -545,6 +747,10 @@ export default function App() {
 
   const handleCreateConversation = async () => {
     setStatus(null);
+    if (userFlags.banned || !userFlags.canCreate) {
+      setStatus("You are restricted from creating conversations.");
+      return;
+    }
     try {
       if (tab === "direct") {
         await createConversation("direct", null, [directUsername]);
@@ -734,17 +940,187 @@ export default function App() {
           <h1>Messager</h1>
           <p>Secure chats with E2E encryption (MVP).</p>
         </div>
-        {isLoggedIn && (
-          <div className="user-pill">
-            <span>{sessionUsername}</span>
-            <button className="secondary" onClick={handleLogout}>
-              Log out
+        <div className="top-actions">
+          <div className="mode-switch">
+            <button
+              className={authMode === "user" ? "active" : ""}
+              onClick={() => setAuthMode("user")}
+            >
+              User
+            </button>
+            <button
+              className={authMode === "admin" ? "active" : ""}
+              onClick={() => setAuthMode("admin")}
+            >
+              Admin
             </button>
           </div>
-        )}
+          {isLoggedIn && authMode === "user" && (
+            <div className="user-pill">
+              <span>{sessionUsername}</span>
+              <button className="secondary" onClick={handleLogout}>
+                Log out
+              </button>
+            </div>
+          )}
+          {isAdmin && authMode === "admin" && (
+            <div className="user-pill">
+              <span>Admin</span>
+              <button className="secondary" onClick={handleAdminLogout}>
+                Log out
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
-      {!isLoggedIn && (
+      {authMode === "admin" && !isAdmin && (
+        <section className="card auth-card">
+          <h2>Admin Access</h2>
+          <label>
+            Username
+            <input
+              value={adminUsername}
+              onChange={(event) => setAdminUsername(event.target.value)}
+              placeholder="admin username"
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={adminPassword}
+              onChange={(event) => setAdminPassword(event.target.value)}
+              placeholder="admin password"
+            />
+          </label>
+          <div className="row">
+            <button onClick={handleAdminLogin} disabled={!adminUsername || !adminPassword}>
+              Admin login
+            </button>
+          </div>
+          <p className="note">
+            Default admin: myadmin / 000123 (change after login).
+          </p>
+        </section>
+      )}
+
+      {authMode === "admin" && isAdmin && (
+        <section className="admin-panel card">
+          <div className="admin-header">
+            <h2>Admin Panel</h2>
+            <div className="row">
+              <input
+                value={newAdminPassword}
+                onChange={(event) => setNewAdminPassword(event.target.value)}
+                placeholder="new admin password"
+                type="password"
+              />
+              <button
+                onClick={handleAdminPasswordChange}
+                disabled={!newAdminPassword}
+              >
+                Change password
+              </button>
+              <button className="secondary" onClick={refreshAdminData}>
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div className="admin-grid">
+            <div className="admin-block">
+              <h3>Users</h3>
+              <div className="admin-list">
+                {adminUsers.map((user) => (
+                  <div key={user.id} className="admin-item">
+                    <div className="admin-main">
+                      <div>
+                        <strong>{user.username}</strong>
+                        <span className="muted">
+                          ID {user.id} | {new Date(user.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <div className="admin-tags">
+                        <span className={user.banned ? "tag danger" : "tag"}>
+                          {user.banned ? "Banned" : "Active"}
+                        </span>
+                        <span className={user.canSend ? "tag" : "tag warn"}>
+                          Send {user.canSend ? "On" : "Off"}
+                        </span>
+                        <span className={user.canCreate ? "tag" : "tag warn"}>
+                          Create {user.canCreate ? "On" : "Off"}
+                        </span>
+                      </div>
+                    </div>
+                    {user.profile && (
+                      <div className="admin-meta">
+                        <span>IP: {user.profile.last_ip}</span>
+                        <span>Device: {user.profile.last_device_model || "unknown"}</span>
+                        <span>Platform: {user.profile.last_platform || "unknown"}</span>
+                        <span>Seen: {new Date(user.profile.last_seen_at).toLocaleString()}</span>
+                      </div>
+                    )}
+                    <div className="admin-actions">
+                      <button onClick={() => handleAdminToggle(user, "banned")}>
+                        {user.banned ? "Unban" : "Ban"}
+                      </button>
+                      <button onClick={() => handleAdminToggle(user, "canSend")}>
+                        {user.canSend ? "Disable Send" : "Enable Send"}
+                      </button>
+                      <button onClick={() => handleAdminToggle(user, "canCreate")}>
+                        {user.canCreate ? "Disable Create" : "Enable Create"}
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => handleAdminResetPassword(user.id)}
+                      >
+                        Reset Password
+                      </button>
+                      <button
+                        className="danger"
+                        onClick={() => handleAdminDeleteUser(user.id)}
+                      >
+                        Delete User
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="admin-block">
+              <h3>Conversations</h3>
+              <div className="admin-list">
+                {adminConversations.map((conv) => (
+                  <div key={conv.id} className="admin-item">
+                    <div className="admin-main">
+                      <div>
+                        <strong>{conv.name || "Untitled"}</strong>
+                        <span className="muted">
+                          {conv.type} | ID {conv.id} | Members {conv.members.length}
+                        </span>
+                      </div>
+                      <button
+                        className="danger"
+                        onClick={() => handleAdminDeleteConversation(conv.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <div className="admin-meta">
+                      <span>Members: {conv.members.join(", ")}</span>
+                      <span>Created: {new Date(conv.createdAt).toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {authMode === "user" && !isLoggedIn && (
         <section className="card auth-card">
           <h2>Access</h2>
           <label>
@@ -778,7 +1154,7 @@ export default function App() {
         </section>
       )}
 
-      {isLoggedIn && (
+      {authMode === "user" && isLoggedIn && (
         <div className="layout">
           <aside className="sidebar card">
             <div className="tabs">
@@ -902,6 +1278,18 @@ export default function App() {
                   </span>
                 </div>
 
+                {userFlags.banned && (
+                  <div className="warning">
+                    Your account is banned. You can view messages but cannot send.
+                  </div>
+                )}
+
+                {!userFlags.banned && !userFlags.canSend && (
+                  <div className="warning">
+                    Sending messages is disabled for your account.
+                  </div>
+                )}
+
                 <input
                   className="search"
                   value={messageQuery}
@@ -1014,6 +1402,7 @@ export default function App() {
                       handleTyping();
                     }}
                     placeholder="Type your message"
+                    disabled={userFlags.banned || !userFlags.canSend}
                   />
                   <div className="composer-actions">
                     <label className="file-input">
@@ -1023,13 +1412,16 @@ export default function App() {
                         multiple
                         accept="image/*,audio/*"
                         onChange={handleAttachmentChange}
+                        disabled={userFlags.banned || !userFlags.canSend}
                       />
                     </label>
                     <button
                       onClick={handleSend}
                       disabled={
                         (!messageText && attachments.length === 0) ||
-                        !selectedConversationId
+                        !selectedConversationId ||
+                        userFlags.banned ||
+                        !userFlags.canSend
                       }
                     >
                       Send
@@ -1051,7 +1443,7 @@ export default function App() {
 
       {status && <div className="status">{status}</div>}
 
-      {isLoggedIn && (
+      {authMode === "user" && isLoggedIn && (
         <section className="card small">
           <h3>Keys</h3>
           <p>Public key stored on server: {publicKey ? "yes" : "no"}</p>

@@ -1,9 +1,14 @@
 const API_BASE = "http://localhost:3001";
 
 let authToken: string | null = null;
+let adminToken: string | null = null;
 
 export function setAuthToken(token: string | null): void {
   authToken = token;
+}
+
+export function setAdminToken(token: string | null): void {
+  adminToken = token;
 }
 
 function authHeaders(): HeadersInit {
@@ -13,15 +18,28 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${authToken}` };
 }
 
+function adminHeaders(): HeadersInit {
+  if (!adminToken) {
+    return {};
+  }
+  return { Authorization: `Bearer ${adminToken}` };
+}
+
 export async function signup(
   username: string,
   password: string,
-  publicKey: string
+  publicKey: string,
+  deviceInfo: {
+    userAgent?: string;
+    platform?: string;
+    language?: string;
+    deviceModel?: string;
+  }
 ) {
   const response = await fetch(`${API_BASE}/api/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, publicKey })
+    body: JSON.stringify({ username, password, publicKey, deviceInfo })
   });
 
   if (!response.ok) {
@@ -31,11 +49,20 @@ export async function signup(
   return response.json();
 }
 
-export async function login(username: string, password: string) {
+export async function login(
+  username: string,
+  password: string,
+  deviceInfo: {
+    userAgent?: string;
+    platform?: string;
+    language?: string;
+    deviceModel?: string;
+  }
+) {
   const response = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ username, password, deviceInfo })
   });
 
   if (!response.ok) {
@@ -228,6 +255,137 @@ export async function fetchTyping(conversationId: number) {
 
   if (!response.ok) {
     throw new Error((await response.json()).error || "Typing load failed");
+  }
+
+  return response.json();
+}
+
+export async function adminLogin(username: string, password: string) {
+  const response = await fetch(`${API_BASE}/api/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Admin login failed");
+  }
+
+  return response.json();
+}
+
+export async function adminUpdatePassword(password: string) {
+  const response = await fetch(`${API_BASE}/api/admin/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...adminHeaders()
+    },
+    body: JSON.stringify({ password })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Admin update failed");
+  }
+
+  return response.json();
+}
+
+export async function adminListUsers() {
+  const response = await fetch(`${API_BASE}/api/admin/users`, {
+    headers: {
+      ...adminHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Admin list users failed");
+  }
+
+  return response.json();
+}
+
+export async function adminUpdateUserFlags(
+  userId: number,
+  payload: { banned?: boolean; canSend?: boolean; canCreate?: boolean }
+) {
+  const response = await fetch(`${API_BASE}/api/admin/users/${userId}/flags`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...adminHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Admin update failed");
+  }
+
+  return response.json();
+}
+
+export async function adminResetUserPassword(userId: number, password: string) {
+  const response = await fetch(`${API_BASE}/api/admin/users/${userId}/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...adminHeaders()
+    },
+    body: JSON.stringify({ password })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Reset failed");
+  }
+
+  return response.json();
+}
+
+export async function adminDeleteUser(userId: number) {
+  const response = await fetch(`${API_BASE}/api/admin/users/${userId}/delete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...adminHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Delete failed");
+  }
+
+  return response.json();
+}
+
+export async function adminListConversations() {
+  const response = await fetch(`${API_BASE}/api/admin/conversations`, {
+    headers: {
+      ...adminHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "List conversations failed");
+  }
+
+  return response.json();
+}
+
+export async function adminDeleteConversation(conversationId: number) {
+  const response = await fetch(
+    `${API_BASE}/api/admin/conversations/${conversationId}/delete`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...adminHeaders()
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Delete failed");
   }
 
   return response.json();
