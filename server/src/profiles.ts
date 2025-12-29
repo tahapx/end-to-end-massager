@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readEncryptedJson, writeEncryptedJson } from "./storage.js";
 
 const PROFILE_DIR = path.join(process.cwd(), "profiles");
 
@@ -46,15 +47,7 @@ export function updateUserProfile(
 ): void {
   ensureDir();
   const filePath = profilePath(username);
-  let existing: UserProfile | null = null;
-
-  if (fs.existsSync(filePath)) {
-    try {
-      existing = JSON.parse(fs.readFileSync(filePath, "utf-8")) as UserProfile;
-    } catch {
-      existing = null;
-    }
-  }
+  const existing = readEncryptedJson<UserProfile>(filePath);
 
   const entry: ProfileEntry = {
     ip,
@@ -80,18 +73,11 @@ export function updateUserProfile(
     history: trimmed
   };
 
-  fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+  writeEncryptedJson(filePath, profile);
 }
 
 export function readUserProfile(username: string): UserProfile | null {
   ensureDir();
   const filePath = profilePath(username);
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as UserProfile;
-  } catch {
-    return null;
-  }
+  return readEncryptedJson<UserProfile>(filePath);
 }

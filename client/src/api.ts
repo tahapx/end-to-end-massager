@@ -26,9 +26,14 @@ function adminHeaders(): HeadersInit {
 }
 
 export async function signup(
+  phone: string,
+  firstName: string,
+  lastName: string,
   username: string,
-  password: string,
+  password: string | null,
   publicKey: string,
+  deviceId: string,
+  deviceName: string,
   deviceInfo: {
     userAgent?: string;
     platform?: string;
@@ -39,7 +44,17 @@ export async function signup(
   const response = await fetch(`${API_BASE}/api/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, publicKey, deviceInfo })
+    body: JSON.stringify({
+      phone,
+      firstName,
+      lastName,
+      username,
+      password,
+      publicKey,
+      deviceId,
+      deviceName,
+      deviceInfo
+    })
   });
 
   if (!response.ok) {
@@ -50,8 +65,10 @@ export async function signup(
 }
 
 export async function login(
-  username: string,
+  phone: string,
   password: string,
+  deviceId: string,
+  deviceName: string,
   deviceInfo: {
     userAgent?: string;
     platform?: string;
@@ -62,7 +79,13 @@ export async function login(
   const response = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, deviceInfo })
+    body: JSON.stringify({
+      phone,
+      password,
+      deviceId,
+      deviceName,
+      deviceInfo
+    })
   });
 
   if (!response.ok) {
@@ -81,7 +104,14 @@ export async function fetchPublicKey(username: string) {
 }
 
 export async function fetchPublicProfile(username: string) {
-  const response = await fetch(`${API_BASE}/api/users/${username}/profile`);
+  const response = await fetch(
+    `${API_BASE}/api/users/${username}/profile-private`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
   if (!response.ok) {
     throw new Error((await response.json()).error || "Profile not available");
   }
@@ -108,6 +138,13 @@ export async function updateProfile(payload: {
   profilePublic?: boolean;
   allowDirect?: boolean;
   allowGroupInvite?: boolean;
+  privacy?: Partial<{
+    hide_online: boolean;
+    hide_last_seen: boolean;
+    hide_profile_photo: boolean;
+    disable_read_receipts: boolean;
+    disable_typing_indicator: boolean;
+  }>;
 }) {
   const response = await fetch(`${API_BASE}/api/profile`, {
     method: "POST",
@@ -122,6 +159,40 @@ export async function updateProfile(payload: {
     throw new Error((await response.json()).error || "Profile update failed");
   }
 
+  return response.json();
+}
+
+export async function publishKeyBundle(payload: {
+  identityKey: string;
+  registrationId: number;
+  deviceId: number;
+  sessionDeviceId: string;
+  signedPreKeyId: number;
+  signedPreKey: string;
+  signedPreKeySig: string;
+  oneTimePreKeys: Array<{ id: number; key: string }>;
+}) {
+  const response = await fetch(`${API_BASE}/api/keys/publish`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Key publish failed");
+  }
+
+  return response.json();
+}
+
+export async function fetchKeyBundle(username: string) {
+  const response = await fetch(`${API_BASE}/api/keys/bundle/${username}`);
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Key bundle unavailable");
+  }
   return response.json();
 }
 
@@ -142,7 +213,8 @@ export async function listConversations() {
 export async function createConversation(
   type: "direct" | "group" | "channel",
   name: string | null,
-  members: string[]
+  members: string[],
+  visibility: "public" | "private" | null = null
 ) {
   const response = await fetch(`${API_BASE}/api/conversations`, {
     method: "POST",
@@ -150,13 +222,165 @@ export async function createConversation(
       "Content-Type": "application/json",
       ...authHeaders()
     },
-    body: JSON.stringify({ type, name, members })
+    body: JSON.stringify({
+      type,
+      name,
+      members,
+      ...(visibility ? { visibility } : {})
+    })
   });
 
   if (!response.ok) {
     throw new Error((await response.json()).error || "Create failed");
   }
 
+  return response.json();
+}
+
+export async function fetchRoster(conversationId: number) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/roster`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Roster load failed");
+  }
+  return response.json();
+}
+
+export async function addConversationMember(
+  conversationId: number,
+  username: string
+) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/members/add`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({ username })
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Add member failed");
+  }
+  return response.json();
+}
+
+export async function removeConversationMember(
+  conversationId: number,
+  username: string
+) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/members/remove`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({ username })
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Remove member failed");
+  }
+  return response.json();
+}
+
+export async function updateConversationRole(
+  conversationId: number,
+  username: string,
+  role: "admin" | "member",
+  permissions?: { manage_members?: boolean; manage_invites?: boolean }
+) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/role`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({ username, role, permissions })
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Role update failed");
+  }
+  return response.json();
+}
+
+export async function createInviteLink(
+  conversationId: number,
+  maxUses: number,
+  expiresInMinutes: number
+) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/invites`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({ maxUses, expiresInMinutes })
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Invite create failed");
+  }
+  return response.json();
+}
+
+export async function listInviteLinks(conversationId: number) {
+  const response = await fetch(
+    `${API_BASE}/api/conversations/${conversationId}/invites`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Invite list failed");
+  }
+  return response.json();
+}
+
+export async function revokeInviteLink(token: string) {
+  const response = await fetch(`${API_BASE}/api/conversations/invites/revoke`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ token })
+  });
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Invite revoke failed");
+  }
+  return response.json();
+}
+
+export async function redeemInviteLink(token: string) {
+  const response = await fetch(`${API_BASE}/api/invites/redeem`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ token })
+  });
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Invite redeem failed");
+  }
   return response.json();
 }
 
@@ -182,6 +406,7 @@ export async function sendMessage(
   payloads: Array<{
     messageId: string;
     toUsername: string;
+    toDeviceId: string;
     ciphertext: string;
     nonce: string;
   }>
@@ -308,6 +533,126 @@ export async function fetchTyping(conversationId: number) {
   return response.json();
 }
 
+export async function fetchUserStatus(username: string) {
+  const response = await fetch(`${API_BASE}/api/users/${username}/status`, {
+    headers: {
+      ...authHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Status load failed");
+  }
+
+  return response.json();
+}
+
+export async function updateContactPrivacy(payload: {
+  username: string;
+  privacy: Partial<{
+    hide_online: boolean;
+    hide_last_seen: boolean;
+    hide_profile_photo: boolean;
+    disable_read_receipts: boolean;
+    disable_typing_indicator: boolean;
+  }>;
+}) {
+  const response = await fetch(`${API_BASE}/api/privacy/contact`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Privacy update failed");
+  }
+
+  return response.json();
+}
+
+export async function enableTwoFactor(password: string) {
+  const response = await fetch(`${API_BASE}/api/auth/2fa/enable`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ password })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Enable 2FA failed");
+  }
+
+  return response.json();
+}
+
+export async function disableTwoFactor(password: string) {
+  const response = await fetch(`${API_BASE}/api/auth/2fa/disable`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({ password })
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Disable 2FA failed");
+  }
+
+  return response.json();
+}
+
+export async function listDevices() {
+  const response = await fetch(`${API_BASE}/api/devices`, {
+    headers: {
+      ...authHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Device list failed");
+  }
+
+  return response.json();
+}
+
+export async function logoutDevice(deviceId: string) {
+  const response = await fetch(`${API_BASE}/api/devices/${deviceId}/logout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Device logout failed");
+  }
+
+  return response.json();
+}
+
+export async function logoutAllDevices() {
+  const response = await fetch(`${API_BASE}/api/devices/logout-all`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Logout all failed");
+  }
+
+  return response.json();
+}
+
 export async function adminLogin(username: string, password: string) {
   const response = await fetch(`${API_BASE}/api/admin/login`, {
     method: "POST",
@@ -355,7 +700,13 @@ export async function adminListUsers() {
 
 export async function adminUpdateUserFlags(
   userId: number,
-  payload: { banned?: boolean; canSend?: boolean; canCreate?: boolean }
+  payload: {
+    banned?: boolean;
+    canSend?: boolean;
+    canCreate?: boolean;
+    allowDirect?: boolean;
+    allowGroupInvite?: boolean;
+  }
 ) {
   const response = await fetch(`${API_BASE}/api/admin/users/${userId}/flags`, {
     method: "POST",
@@ -417,6 +768,107 @@ export async function adminListConversations() {
     throw new Error((await response.json()).error || "List conversations failed");
   }
 
+  return response.json();
+}
+
+export async function adminDownloadUserMetadata(userId: number) {
+  const response = await fetch(
+    `${API_BASE}/api/admin/users/${userId}/profile-json`,
+    {
+      headers: {
+        ...adminHeaders()
+      }
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Download failed");
+  }
+  return response.blob();
+}
+
+export async function startCall(payload: {
+  callId: string;
+  conversationId: number;
+  toUsername: string;
+  toDeviceId: string;
+  media: "audio" | "video";
+  offer: string;
+}) {
+  const response = await fetch(`${API_BASE}/api/calls/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Call start failed");
+  }
+  return response.json();
+}
+
+export async function answerCall(payload: { callId: string; answer: string }) {
+  const response = await fetch(`${API_BASE}/api/calls/answer`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Call answer failed");
+  }
+  return response.json();
+}
+
+export async function sendIceCandidate(payload: {
+  callId: string;
+  candidate: string;
+  target: "caller" | "callee";
+}) {
+  const response = await fetch(`${API_BASE}/api/calls/ice`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "ICE send failed");
+  }
+  return response.json();
+}
+
+export async function endCall(payload: { callId: string }) {
+  const response = await fetch(`${API_BASE}/api/calls/end`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Call end failed");
+  }
+  return response.json();
+}
+
+export async function pollCalls(since: number) {
+  const response = await fetch(
+    `${API_BASE}/api/calls/poll?since=${since}`,
+    {
+      headers: {
+        ...authHeaders()
+      }
+    }
+  );
+  if (!response.ok) {
+    throw new Error((await response.json()).error || "Call poll failed");
+  }
   return response.json();
 }
 

@@ -83,12 +83,20 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+## Encrypt-at-rest requirement
+
+Server requires `APP_MASTER_KEY` to start. Example:
+
+```bash
+set APP_MASTER_KEY=your-strong-random-key-here
+```
+
 ## Admin panel
 
 Default admin credentials:
 
-- Username: `myadmin`
-- Password: `000123`
+- Username: `taha`
+- Password: `12345678`
 
 Change the admin password after first login in the admin panel.
 
