@@ -1788,7 +1788,7 @@ export default function App() {
       if (tab === "direct") {
         await createConversation("direct", null, [directUsername]);
         setDirectUsername("");
-      } else {
+      } else if (tab === "group" || tab === "channel") {
         const members = groupMembers
           .split(",")
           .map((item) => item.trim())
@@ -1798,6 +1798,9 @@ export default function App() {
         setGroupName("");
         setGroupMembers("");
         setGroupVisibility("public");
+      } else {
+        setStatus("Select a conversation type first.");
+        return;
       }
       await refreshConversations();
       setStatus("Conversation created");
@@ -3278,19 +3281,15 @@ export default function App() {
                             </button>
                           </>
                         )}
-                        {callState.status !== "idle" && (
-                          <button
-                            className="secondary"
-                            onClick={handleToggleMic}
-                          >
-                            {micMuted ? "Mic off" : "Mic on"}
-                          </button>
-                        )}
-                        {callState.status !== "idle" && (
-                          <button className="danger" onClick={handleEndCall}>
-                            End call
-                          </button>
-                        )}
+                        <button
+                          className="secondary"
+                          onClick={handleToggleMic}
+                        >
+                          {micMuted ? "Mic off" : "Mic on"}
+                        </button>
+                        <button className="danger" onClick={handleEndCall}>
+                          End call
+                        </button>
                       </div>
                     </div>
                     {callError && <p className="note">{callError}</p>}
