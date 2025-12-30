@@ -60,6 +60,7 @@ import {
   encryptSignalMessage,
   ensureLocalKeys,
   ensureSession,
+  isSignalSupported,
   exportSignalState,
   importSignalState,
   resetSignalState
@@ -488,6 +489,7 @@ export default function App() {
   const [callError, setCallError] = useState<string | null>(null);
   const [importingKeys, setImportingKeys] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
+  const signalSupported = isSignalSupported();
 
   const lastPollRef = useRef(0);
   const lastStatusPollRef = useRef(0);
@@ -673,7 +675,7 @@ export default function App() {
   }, [isLoggedIn]);
 
   useEffect(() => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || !signalSupported) {
       return;
     }
     ensureLocalKeys(sessionUsername, false)
@@ -1188,10 +1190,18 @@ export default function App() {
         setStatus("2FA password must be at least 6 characters.");
         return;
       }
-      const bundle = await ensureLocalKeys(username, true);
-      if (!bundle) {
-        setStatus("Failed to create local keys.");
-        return;
+      let bundle: Awaited<ReturnType<typeof ensureLocalKeys>> | null = null;
+      let publicKey = "";
+      if (signalSupported) {
+        bundle = await ensureLocalKeys(username, true);
+        if (!bundle) {
+          setStatus("Failed to create local keys.");
+          return;
+        }
+        publicKey = bundle.identityKey;
+      } else {
+        publicKey = `plain:${Date.now()}-${Math.random()}`;
+        setStatus("Encryption is disabled on HTTP (temporary).");
       }
       const data = await signup(
         phone,
@@ -1199,7 +1209,7 @@ export default function App() {
         lastName,
         username,
         enable2fa ? password : null,
-        bundle.identityKey,
+        publicKey,
         deviceId,
         deviceName,
         getDeviceInfo()
@@ -1228,10 +1238,12 @@ export default function App() {
       setTwoFactorEnabled(Boolean(data.twoFactorEnabled));
 
       setAuthToken(data.token);
-      await publishKeyBundle({
-        ...bundle,
-        sessionDeviceId: deviceId
-      });
+      if (signalSupported && bundle) {
+        await publishKeyBundle({
+          ...bundle,
+          sessionDeviceId: deviceId
+        });
+      }
 
       localStorage.setItem(STORAGE_KEYS.username, data.username);
       localStorage.setItem(STORAGE_KEYS.token, data.token);
@@ -1285,15 +1297,17 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.token, data.token);
 
       setAuthToken(data.token);
-      const bundle = await ensureLocalKeys(data.username, true);
-      if (!bundle) {
-        setStatus("Failed to create local keys.");
-        return;
+      if (signalSupported) {
+        const bundle = await ensureLocalKeys(data.username, true);
+        if (!bundle) {
+          setStatus("Failed to create local keys.");
+          return;
+        }
+        await publishKeyBundle({
+          ...bundle,
+          sessionDeviceId: deviceId
+        });
       }
-      await publishKeyBundle({
-        ...bundle,
-        sessionDeviceId: deviceId
-      });
 
       setStatus(
         data.newDevice
@@ -1667,7 +1681,17 @@ export default function App() {
         (member) => member.username !== sessionUsername
       );
 
-      if (conversation.type === "direct") {
+      if (!signalSupported) {
+        for (const member of recipients) {
+          payloads.push({
+            messageId,
+            toUsername: member.username,
+            toDeviceId: "*",
+            ciphertext: JSON.stringify(envelope),
+            nonce: "plain:v1"
+          });
+        }
+      } else if (conversation.type === "direct") {
         for (const member of recipients) {
           const bundle = await fetchKeyBundle(member.username);
           const devices = bundle.devices || [];

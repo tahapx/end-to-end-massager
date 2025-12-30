@@ -1235,6 +1235,30 @@ server.post(
       return reply.status(404).send({ error: "recipient not found" });
     }
 
+    const isPlaintext = nonce.startsWith("plain:");
+    if (isPlaintext && toDeviceId === "*") {
+      const recipientSessions = listSessionsForUser(recipient.id);
+      if (recipientSessions.length === 0) {
+        return reply
+          .status(400)
+          .send({ error: "recipient has no active sessions" });
+      }
+      for (const sessionRow of recipientSessions) {
+        createMessage(
+          messageId,
+          conversationId,
+          session.userId,
+          senderSignalDeviceId,
+          recipient.id,
+          sessionRow.device_id,
+          ciphertext,
+          nonce,
+          ciphertext.length
+        );
+      }
+      continue;
+    }
+
     createMessage(
       messageId,
       conversationId,

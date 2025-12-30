@@ -51,6 +51,15 @@ type DeviceBundle = {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+export function isSignalSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean(window.isSecureContext) &&
+    typeof crypto !== "undefined" &&
+    Boolean(crypto.subtle)
+  );
+}
+
 function ensureBufferGlobal() {
   const globalAny = globalThis as typeof globalThis & { Buffer?: typeof Buffer };
   if (!globalAny.Buffer) {
