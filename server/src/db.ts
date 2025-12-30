@@ -160,6 +160,13 @@ const defaultDb: DbShape = {
 
 const DEFAULT_ADMIN_USERNAME = "taha";
 const DEFAULT_ADMIN_PASSWORD = "12345678";
+const DEFAULT_PRIVACY = {
+  hide_online: false,
+  hide_last_seen: false,
+  hide_profile_photo: false,
+  disable_read_receipts: false,
+  disable_typing_indicator: false
+};
 
 function loadDb(): DbShape {
   const parsed = readEncryptedJson<DbShape>(DB_PATH);
@@ -180,14 +187,7 @@ function loadDb(): DbShape {
     first_name: user.first_name || "",
     last_name: user.last_name || "",
     two_factor_enabled: Boolean(user.two_factor_enabled),
-    privacy_defaults: {
-      hide_online: false,
-      hide_last_seen: false,
-      hide_profile_photo: false,
-      disable_read_receipts: false,
-      disable_typing_indicator: false,
-      ...(user.privacy_defaults || {})
-    },
+    privacy_defaults: { ...DEFAULT_PRIVACY, ...(user.privacy_defaults || {}) },
     privacy_overrides: user.privacy_overrides || {}
   }));
   db.sessions = db.sessions.map((session) => ({
@@ -443,19 +443,15 @@ export function clearUserTwoFactor(userId: number): boolean {
   return true;
 }
 
+type UserAccountUpdate = Partial<
+  Pick<UserRow, "avatar" | "bio" | "profile_public" | "allow_direct" | "allow_group_invite">
+> & {
+  privacy_defaults?: Partial<UserRow["privacy_defaults"]>;
+};
+
 export function updateUserAccount(
   userId: number,
-  updates: Partial<
-    Pick<
-      UserRow,
-      | "avatar"
-      | "bio"
-      | "profile_public"
-      | "allow_direct"
-      | "allow_group_invite"
-      | "privacy_defaults"
-    >
-  >
+  updates: UserAccountUpdate
 ): UserRow | null {
   const db = loadDb();
   const user = db.users.find((item) => item.id === userId);
