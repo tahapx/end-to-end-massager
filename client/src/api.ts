@@ -1,7 +1,7 @@
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   (typeof window !== "undefined" && window.location.hostname !== "localhost"
-    ? "/api"
+    ? ""
     : "http://localhost:3001");
 
 let authToken: string | null = null;
