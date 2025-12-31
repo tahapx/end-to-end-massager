@@ -1190,19 +1190,16 @@ export default function App() {
         setStatus("2FA password must be at least 6 characters.");
         return;
       }
-      let bundle: Awaited<ReturnType<typeof ensureLocalKeys>> | null = null;
-      let publicKey = "";
-      if (signalSupported) {
-        bundle = await ensureLocalKeys(username, true);
-        if (!bundle) {
-          setStatus("Failed to create local keys.");
-          return;
-        }
-        publicKey = bundle.identityKey;
-      } else {
-        publicKey = `plain:${Date.now()}-${Math.random()}`;
-        setStatus("Encryption is disabled on HTTP (temporary).");
+      if (!signalSupported) {
+        setStatus("Encryption requires HTTPS. Please use the secure domain.");
+        return;
       }
+      const bundle = await ensureLocalKeys(username, true);
+      if (!bundle) {
+        setStatus("Failed to create local keys.");
+        return;
+      }
+      const publicKey = bundle.identityKey;
       const data = await signup(
         phone,
         firstName,
@@ -1238,7 +1235,7 @@ export default function App() {
       setTwoFactorEnabled(Boolean(data.twoFactorEnabled));
 
       setAuthToken(data.token);
-      if (signalSupported && bundle) {
+      if (signalSupported) {
         await publishKeyBundle({
           ...bundle,
           sessionDeviceId: deviceId
@@ -1297,17 +1294,19 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.token, data.token);
 
       setAuthToken(data.token);
-      if (signalSupported) {
-        const bundle = await ensureLocalKeys(data.username, true);
-        if (!bundle) {
-          setStatus("Failed to create local keys.");
-          return;
-        }
-        await publishKeyBundle({
-          ...bundle,
-          sessionDeviceId: deviceId
-        });
+      if (!signalSupported) {
+        setStatus("Encryption requires HTTPS. Please use the secure domain.");
+        return;
       }
+      const bundle = await ensureLocalKeys(data.username, true);
+      if (!bundle) {
+        setStatus("Failed to create local keys.");
+        return;
+      }
+      await publishKeyBundle({
+        ...bundle,
+        sessionDeviceId: deviceId
+      });
 
       setStatus(
         data.newDevice
@@ -1682,16 +1681,11 @@ export default function App() {
       );
 
       if (!signalSupported) {
-        for (const member of recipients) {
-          payloads.push({
-            messageId,
-            toUsername: member.username,
-            toDeviceId: "*",
-            ciphertext: JSON.stringify(envelope),
-            nonce: "plain:v1"
-          });
-        }
-      } else if (conversation.type === "direct") {
+        setStatus("Encryption requires HTTPS. Please use the secure domain.");
+        return;
+      }
+
+      if (conversation.type === "direct") {
         for (const member of recipients) {
           const bundle = await fetchKeyBundle(member.username);
           const devices = bundle.devices || [];
