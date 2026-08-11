@@ -80,7 +80,6 @@
 <details>
 <summary><strong>🎨 User Experience</strong></summary>
 
-- **Telegram-style settings** — Stacked page navigation with instant toggles
 - **Dark/Light/System theme** — Automatic dark mode with accent color customization
 - **4 accent color schemes** — Teal, Blue, Green, Amber
 - **Font size scaling** — Small, Medium, Large
